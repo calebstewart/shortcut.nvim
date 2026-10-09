@@ -10,6 +10,10 @@
 --- refused. So is a write from another window (`:wall`, `:wqa`, `:xa` there): the draft is
 --- kept, still modified, so `:wqa`/`:xa` don't exit. Neovim makes the buffer current for the
 --- autocommand, so focus is tracked with `BufEnter`/`BufLeave`, which it doesn't trigger then.
+--- Switching windows with autocommands suppressed (`:noautocmd wincmd p`, some plugins) leaves
+--- that stale, so a command typed on the command line must also have been typed in the float's
+--- window (recorded on `CmdlineLeave`). What remains: a write from a mapping or plugin
+--- (`<Cmd>wall<CR>`) after such a switch is taken as coming from the float.
 ---
 --- `:wqa`/`:xa` in the float itself post and wait for the answer (at most `QUIT_WAIT`): if it
 --- fails, the buffer stays modified, so Neovim doesn't exit and the error is shown. As a last
@@ -31,6 +35,10 @@ local focused = {}
 
 --- Set by `QuitPre` until the command has run: a write now is part of `:wqa`/`:xa`.
 local quitting = false
+
+--- The window an Ex command line was typed in, until the command has run.
+---@type integer?
+local cmdline_win
 
 ---@param id integer
 ---@param title? string The story's title.
@@ -171,9 +179,24 @@ local function save_unsent(id, lines)
   if not fs.mkdir_p(dir, tonumber('700', 8)) then
     return nil
   end
-  local path = vim.fs.joinpath(dir, ('comment-sc-%d-%d.md'):format(id, os.time()))
-  local ok = fs.write_atomic(path, table.concat(lines, '\n') .. '\n')
-  return ok and path or nil
+  local data = table.concat(lines, '\n') .. '\n'
+  local stamp = os.time()
+  -- Exclusive creation: never overwrite another draft (e.g. one saved in the same second).
+  for n = 1, 100 do
+    local base = n == 1 and ('comment-sc-%d-%d.md'):format(id, stamp)
+      or ('comment-sc-%d-%d-%d.md'):format(id, stamp, n)
+    local path = vim.fs.joinpath(dir, base)
+    local fd, _, code = vim.uv.fs_open(path, 'wx', tonumber('600', 8))
+    if fd then
+      local written = vim.uv.fs_write(fd, data, 0)
+      vim.uv.fs_fsync(fd)
+      vim.uv.fs_close(fd)
+      return written == #data and path or nil
+    elseif code ~= 'EEXIST' then
+      return nil
+    end
+  end
+  return nil
 end
 
 --- On exit, wait (at most `EXIT_WAIT`) for posts in flight, and save the drafts of those that
@@ -194,8 +217,12 @@ function M.on_exit()
   for key, p in pairs(inflight) do
     if not (p.done and p.ok) then
       local path = save_unsent(p.id, p.lines)
-      local msg = ('shortcut.nvim: the comment on sc-%d was not posted%s'):format(
+      -- Without an answer, the server may have got it: say so, lest it be posted twice.
+      local what = p.done and 'was not posted'
+        or 'was not confirmed as posted (it may still have been)'
+      local msg = ('shortcut.nvim: the comment on sc-%d %s%s'):format(
         p.id,
+        what,
         path and ('; it was saved to ' .. path) or ''
       )
       -- The UI may already be gone: stderr is shown in the terminal after exit.
@@ -319,6 +346,14 @@ function M.post(buf)
   return true, is_done
 end
 
+---@param target string
+---@return string
+local function refusal(target)
+  return ('shortcut.nvim: cannot write the comment to %s: :w posts it, :q! discards it'):format(
+    notify.flatten(target)
+  )
+end
+
 --- The `BufWriteCmd` of a comment buffer: only a write of the buffer to its own name (`:w`,
 --- `:w!`, `:wq`, `:x`, `:up`) posts. Writing it elsewhere (`:w file`, `:saveas file`,
 --- `:w shortcut://story/<id>`) is refused and sends nothing.
@@ -336,14 +371,14 @@ function M.on_write(ev)
       -- `:saveas` renamed the buffer before writing: give it its name back.
       pcall(vim.api.nvim_buf_set_name, buf, name)
     end
-    notify.error(
-      ('cannot write the comment to %s: :w posts it, :q! discards it'):format(
-        notify.flatten(ev.match)
-      )
-    )
-    return
+    -- An error, not a message: `:wq file` and `:x file` must not go on to quit and lose the draft.
+    error(refusal(ev.match), 0)
   end
-  if not focused[buf] or vim.api.nvim_get_current_buf() ~= buf then
+  local typed_elsewhere = cmdline_win ~= nil
+    and not (
+      vim.api.nvim_win_is_valid(cmdline_win) and vim.api.nvim_win_get_buf(cmdline_win) == buf
+    )
+  if not focused[buf] or typed_elsewhere or vim.api.nvim_get_current_buf() ~= buf then
     -- `:wall`/`:wqa`/`:xa` from another window: the draft may be half-written. Left modified,
     -- so `:wqa`/`:xa` don't exit.
     notify.warn(
@@ -375,16 +410,32 @@ function M.on_write(ev)
   end
 end
 
-local quit_group ---@type integer?
+local watch_group ---@type integer?
 
---- Track `QuitPre`, which `:wqa`/`:xa` trigger before writing.
-local function watch_quit()
-  if quit_group then
+--- Track `QuitPre`, which `:wqa`/`:xa` trigger before writing, and the window Ex commands are
+--- typed in.
+local function watch_commands()
+  if watch_group then
     return
   end
-  quit_group = vim.api.nvim_create_augroup('shortcut.buffer.comment.quit', { clear = true })
+  watch_group = vim.api.nvim_create_augroup('shortcut.buffer.comment.watch', { clear = true })
+  vim.api.nvim_create_autocmd('CmdlineLeave', {
+    group = watch_group,
+    pattern = ':',
+    desc = 'shortcut.nvim: where a command that may write a comment was typed',
+    callback = function()
+      local win = vim.api.nvim_get_current_win()
+      cmdline_win = win
+      -- Once the command has run.
+      vim.schedule(function()
+        if cmdline_win == win then
+          cmdline_win = nil
+        end
+      end)
+    end,
+  })
   vim.api.nvim_create_autocmd('QuitPre', {
-    group = quit_group,
+    group = watch_group,
     desc = 'shortcut.nvim: wait for a comment posted by :wqa',
     callback = function()
       quitting = true
@@ -462,11 +513,7 @@ function M.open(id, opts)
     buffer = buf,
     desc = 'shortcut.nvim: refuse partial writes of a comment',
     callback = function(ev)
-      notify.error(
-        ('cannot write the comment to %s: :w posts it, :q! discards it'):format(
-          notify.flatten(ev.match)
-        )
-      )
+      error(refusal(ev.match), 0)
     end,
   })
   -- Not triggered when Neovim makes the buffer current for `:wall` from another window.
@@ -490,7 +537,7 @@ function M.open(id, opts)
       focused[ev.buf] = nil
     end,
   })
-  watch_quit()
+  watch_commands()
 
   open_win(buf, M.title(id, opts.title))
   if not opts.lines then

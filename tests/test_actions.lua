@@ -210,18 +210,25 @@ T['comment']['writing it anywhere else posts nothing and writes no file'] = func
     '1write ' .. file,
     '1,1write!',
     'write !cat > /dev/null',
+    -- The refusal is an error, so the quit doesn't go ahead and lose the draft.
+    'wq ' .. file,
+    'xit ' .. file,
+    '1,1wq ' .. file,
   }) do
     child.lua('_G.messages = {}')
-    pcall(child.cmd, cmd)
+    local ok, err = pcall(child.cmd, cmd)
     child.lua('vim.wait(50)')
     eq({ cmd = cmd, writes = writes() }, { cmd = cmd, writes = {} })
     eq(child.lua_get('vim.uv.fs_stat(...) == nil', { file }), true)
     eq(child.api.nvim_buf_get_name(0), 'shortcut://story/301/comment')
+    eq(child.lua_get('vim.api.nvim_win_get_config(0).relative'), 'editor')
+    eq(child.api.nvim_buf_get_lines(0, 0, -1, false), { 'draft', 'two' })
     eq(child.bo.modified, true)
+    eq(messages(), {})
     if not vim.startswith(cmd, 'write !') then
-      eq({ cmd = cmd, n = #messages() }, { cmd = cmd, n = 1 })
+      eq({ cmd = cmd, ok = ok }, { cmd = cmd, ok = false })
       expect.no_error(function()
-        assert(messages()[1].msg:find('cannot write the comment to ', 1, true), cmd)
+        assert(tostring(err):find('cannot write the comment to ', 1, true), cmd)
       end)
     end
   end
@@ -381,6 +388,77 @@ T['comment']['exiting waits for the post, and saves the draft if it fails'] = fu
         :find('the comment on sc-301 was not posted; it was saved to', 1, true)
     )
   end)
+end
+
+T['comment']['an unanswered post at exit may have been posted; drafts never overwrite'] = function()
+  child.lua([[
+    _G.stderr = {}
+    io.stderr = { write = function(_, s) table.insert(_G.stderr, s) end }
+    local comment = require('shortcut.buffer.comment')
+    comment.EXIT_WAIT = 50
+    _G.overrides['POST /stories/301/comments'] = { status = 201, fixture = 'comment', hold = true }
+  ]])
+  -- Two posts of the same story in flight (within the same second).
+  for _, text in ipairs({ 'one', 'two' }) do
+    child.lua(
+      [[
+      require('shortcut.buffer.comment').open(301, { title = 'x' })
+      vim.cmd('stopinsert')
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, { ... })
+      vim.cmd('write')
+    ]],
+      { text }
+    )
+    child.cmd('quit')
+  end
+  child.lua([[require('shortcut.buffer.comment').on_exit()]])
+  eq(#writes(), 2)
+  local files = child.lua_get(
+    [[vim.fn.glob(require('shortcut.buffer.comment').unsent_dir() .. '/comment-sc-301-*.md', false, true)]]
+  )
+  eq(#files, 2)
+  local texts = { child.fn.readfile(files[1])[1], child.fn.readfile(files[2])[1] }
+  table.sort(texts)
+  eq(texts, { 'one', 'two' })
+  local stderr = child.lua_get('_G.stderr')
+  eq(#stderr, 2)
+  for _, line in ipairs(stderr) do
+    expect.no_error(function()
+      assert(
+        line:find(
+          'the comment on sc-301 was not confirmed as posted (it may still have been); it was saved to',
+          1,
+          true
+        ),
+        line
+      )
+    end)
+  end
+end
+
+T['comment']['focus left with :noautocmd: a :wall typed elsewhere posts nothing'] = function()
+  open_comment('301')
+  child.cmd('stopinsert')
+  local buf = child.api.nvim_get_current_buf()
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'half a' })
+  child.type_keys(':noautocmd wincmd p<CR>')
+  eq(child.api.nvim_get_current_buf() ~= buf, true)
+  child.lua('_G.messages = {}')
+  child.type_keys(':wall<CR>')
+  child.lua('vim.wait(50)')
+  eq(writes(), {})
+  eq(child.api.nvim_buf_get_option(buf, 'modified'), true)
+  eq(messages(), {
+    {
+      msg = 'shortcut.nvim: the comment on sc-301 was not posted: only :w in its window posts it',
+      level = 3,
+    },
+  })
+  -- Typed in the float, it posts.
+  child.cmd('Shortcut comment 301')
+  child.type_keys(':wall<CR>')
+  wait_messages(2)
+  eq(writes(), { { method = 'POST', path = '/stories/301/comments', body = { text = 'half a' } } })
 end
 
 T['comment']['an empty comment is rejected'] = function()

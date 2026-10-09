@@ -162,14 +162,15 @@ bare ID is looked up to find out which it is).
   open, is reloaded to show the comment, unless it has unsaved changes.
 
   Only writing the float to its own name posts (`:w`, `:w!`, `:wq`, `:x`, `:update`). Writing
-  it anywhere else (`:w file`, `:saveas file`, `:1,2w file`, `:w >> file`) is refused: nothing
-  is posted and no file is written. `:wall`, `:wqa` and `:xa` run from another window don't post
+  it anywhere else (`:w file`, `:wq file`, `:saveas file`, `:1,2w file`, `:w >> file`) fails
+  with an error, so `:wq file` doesn't close the float: nothing is posted and no file is
+  written. `:wall`, `:wqa` and `:xa` run from another window don't post
   the draft either: it stays modified, so `:wqa` and `:xa` don't exit. Run in the float itself,
   they post it (like `:w`), and `:wqa`/`:xa` wait for the answer (up to 10 seconds): if posting
   fails or takes longer, Neovim doesn't exit and the text stays. If Neovim exits anyway with a
   comment still being posted (`:w` then `:qa`), it waits for the answer (up to 15 seconds); a
-  comment that could not be posted is saved under `stdpath('state')/shortcut/unsent/` and the
-  path is printed.
+  comment that could not be posted, or whose answer didn't come (it may still have been posted),
+  is saved under `stdpath('state')/shortcut/unsent/` and the path is printed.
 - **`:Shortcut state`** lists the states of the story's workflow in order, the current one
   marked, with `vim.ui.select`. Give a state name to move the story directly; names are
   completed with `<Tab>` (the current story buffer's workflow, or every workflow's) and matched
