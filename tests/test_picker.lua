@@ -515,6 +515,42 @@ T['preview_lines()']['clearing the lookup-list cache (:Shortcut refresh) drops p
   eq(count('/epics/202'), 2)
 end
 
+T['preview_lines()']['any write request drops every preview'] = function()
+  preview_lines('story', 101)
+  preview_lines('epic', 202)
+  child.lua([[
+    local done
+    require('shortcut.api.stories').update(101, { name = 'x' }, function() done = true end)
+    vim.wait(2000, function() return done end, 2)
+  ]])
+  eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 })'), vim.NIL)
+  eq(child.lua_get('picker.cached_preview({ kind = "epic", id = 202 })'), vim.NIL)
+  -- A cancelled write may have reached the server too.
+  preview_lines('story', 101)
+  child.lua([[
+    _G.overrides['/stories/101/comments'] = { status = 201, body = '{}', hold = true }
+    local h = require('shortcut.api.stories').comments.create(101, { text = 'x' }, function() end)
+    vim.wait(2000, function() return #_G.held > 0 end, 2)
+    h:cancel()
+  ]])
+  eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 })'), vim.NIL)
+  -- Reads don't.
+  preview_lines('story', 101)
+  preview_lines('epic', 202)
+  eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 }) ~= nil'), true)
+end
+
+T['preview_lines()']["loading an object's buffer drops its preview"] = function()
+  preview_lines('story', 101)
+  preview_lines('epic', 202)
+  child.cmd('edit shortcut://story/101')
+  child.lua([[vim.wait(2000, function()
+    return (vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] or '') == '---'
+  end, 5)]])
+  eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 })'), vim.NIL)
+  eq(child.lua_get('picker.cached_preview({ kind = "epic", id = 202 }) ~= nil'), true)
+end
+
 T['preview_lines()']['invalidate_preview() drops one preview'] = function()
   preview_lines('story', 101)
   preview_lines('epic', 202)

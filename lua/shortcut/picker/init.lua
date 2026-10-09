@@ -355,8 +355,10 @@ end
 --- Previews kept per session.
 M.PREVIEW_CACHE_SIZE = 50
 
---- How long a cached preview is used, in seconds. Changes made elsewhere (the web app, or
---- `:Shortcut state` on a story whose buffer isn't open) show up after this.
+--- How long a cached preview is used, in seconds, so that changes made elsewhere (e.g. in the
+--- web app) show up. Changes made from Neovim (any write request: saving a buffer, `:Shortcut
+--- state`, a comment...) drop every cached preview at once, as does `:Shortcut refresh`; loading
+--- an object's buffer drops its preview.
 M.PREVIEW_TTL = 300
 
 --- At most this many previews are fetched per minute (each costs one or two requests; the API
@@ -367,6 +369,7 @@ M.PREVIEW_RATE = 40
 ---@field lines string[]
 ---@field at integer `vim.uv.now()` when fetched.
 ---@field generation integer `cache.generation()` when fetched.
+---@field writes integer `http.writes()` when fetched.
 
 ---@type table<string, shortcut.picker.CachedPreview>
 local preview_cache = {}
@@ -400,6 +403,7 @@ function M.cached_preview(item)
   if
     vim.uv.now() - entry.at >= M.PREVIEW_TTL * 1000
     or entry.generation ~= require('shortcut.cache').generation()
+    or entry.writes ~= require('shortcut.http').writes()
   then
     preview_cache[key] = nil
     return nil
@@ -417,7 +421,8 @@ end
 ---@param key string
 ---@param lines string[]
 ---@param generation integer
-local function remember(key, lines, generation)
+---@param writes integer
+local function remember(key, lines, generation, writes)
   if not preview_cache[key] then
     preview_order = vim.tbl_filter(function(k)
       return k ~= key and preview_cache[k] ~= nil
@@ -427,7 +432,8 @@ local function remember(key, lines, generation)
       preview_cache[table.remove(preview_order, 1)] = nil
     end
   end
-  preview_cache[key] = { lines = lines, at = vim.uv.now(), generation = generation }
+  preview_cache[key] =
+    { lines = lines, at = vim.uv.now(), generation = generation, writes = writes }
 end
 
 --- Milliseconds to wait before the next preview fetch is allowed (0: now). See `PREVIEW_RATE`.
@@ -552,6 +558,7 @@ function M.preview_lines(item, callback)
   end
   table.insert(fetch_times, vim.uv.now())
   local generation = require('shortcut.cache').generation()
+  local writes = require('shortcut.http').writes()
   local handle
   if item.kind == 'story' then
     local story = require('shortcut.buffer.story')
@@ -565,7 +572,7 @@ function M.preview_lines(item, callback)
       if not ok then
         return deliver(tostring(lines))
       end
-      remember(key, lines, generation)
+      remember(key, lines, generation, writes)
       deliver(nil, lines)
     end)
   else
@@ -582,7 +589,7 @@ function M.preview_lines(item, callback)
       if not ok then
         return deliver(tostring(lines))
       end
-      remember(key, lines, generation)
+      remember(key, lines, generation, writes)
       deliver(nil, lines)
     end)
   end
