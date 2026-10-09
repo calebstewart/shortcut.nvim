@@ -46,6 +46,7 @@ local M = {}
 ---@field fields string[] Names of the changed buffer fields (`title`, `description`, `state`, ...).
 ---@field epic? { id: integer, line: integer } A new epic, to check exists before saving.
 ---@field tasks { update: shortcut.story_diff.TaskUpdate[], create: shortcut.story_diff.TaskCreate[], delete: shortcut.story_diff.TaskDelete[] }
+---@field relink? table<integer, integer> Lines without a valid mark that were matched to a task anyway -> task ID (to mark them again).
 
 ---@param v any
 ---@return boolean
@@ -330,10 +331,12 @@ function M.diff(orig, cur, ctx)
     end
   end
 
-  -- Which task each line is: its valid mark, if any. A line without one is matched to a task
-  -- that lost its mark (its line was deleted) if the text is that task's description and the
-  -- match is unambiguous: replacing a line with `nvim_buf_set_lines()` (as checkbox-toggling
-  -- plugins do), `:sort` or `ddp` then don't read as a deleted task plus a new one.
+  -- Which task each line is: its valid mark, if any. A line without one may still be a task
+  -- that lost its mark (its line was deleted), when unambiguous:
+  --   - replaced in place (`nvim_buf_set_lines()`, as checkbox-toggling plugins do): the task
+  --     with the same description whose invalidated mark is where its line was,
+  --   - moved (`ddp`, `:sort`): the only task left that reads exactly the same.
+  -- Anything else is a deleted task plus a new one, which the delete prompt asks about.
   local kept = {} ---@type table<integer, true>
   local match = {} ---@type table<shortcut.story_parse.Task, integer>
   for _, t in ipairs(cur.tasks) do
@@ -350,38 +353,79 @@ function M.diff(orig, cur, ctx)
     local o = orig_by_id[id]
     return not kept[id] and o ~= nil and o.description == t.description
   end
-  -- The task whose invalidated mark sits on the line.
+  -- Replaced in place. A replaced line's invalidated mark ends up on that line or, as a new
+  -- line is inserted in front of it, on the first line after the replaced ones: walk down from
+  -- the line through lines that are unmatched tasks, up to and including the next other line.
+  local invalid = ctx.invalid or {}
+  local unmatched_line = {} ---@type table<integer, true>
   for _, t in ipairs(cur.tasks) do
     if not match[t] then
-      local found = vim.tbl_filter(function(id)
-        return orphan_of(t, id)
-      end, (ctx.invalid or {})[t.line] or {})
+      unmatched_line[t.line] = true
+    end
+  end
+  for _, t in ipairs(cur.tasks) do
+    if not match[t] then
+      local function orphans(ids)
+        return vim.tbl_filter(function(id)
+          return orphan_of(t, id)
+        end, ids)
+      end
+      -- On the line itself first.
+      local found = orphans(invalid[t.line] or {})
+      if #found ~= 1 then
+        local candidates = {}
+        local line = t.line
+        while line < cur.comments_marker do
+          vim.list_extend(candidates, invalid[line] or {})
+          if line ~= t.line and not unmatched_line[line] then
+            break
+          end
+          line = line + 1
+        end
+        found = orphans(candidates)
+      end
       if #found == 1 then
         kept[found[1]] = true
         match[t] = found[1]
+        changes.relink = changes.relink or {}
+        changes.relink[t.line] = found[1]
       end
     end
   end
-  -- The only task left with that description, for the only line left with it.
-  local lines_by_text, tasks_by_text = {}, {} ---@type table<string, shortcut.story_parse.Task[]>, table<string, integer[]>
+  -- The only task left that reads exactly the same (text, checkbox and owners), for the only
+  -- line left that does: a move (`ddp`, `:sort`). Anything else is a deleted task plus a new
+  -- one, which the delete prompt asks about.
+  ---@param t shortcut.story_parse.Task
+  ---@return string
+  local function whole(t)
+    return table.concat(
+      { t.complete and 'x' or ' ', table.concat(t.owners, ' '), t.description },
+      '\0'
+    )
+  end
+  local lines_by_key, tasks_by_key = {}, {} ---@type table<string, shortcut.story_parse.Task[]>, table<string, integer[]>
   for _, t in ipairs(cur.tasks) do
     if not match[t] then
-      lines_by_text[t.description] = lines_by_text[t.description] or {}
-      table.insert(lines_by_text[t.description], t)
+      local key = whole(t)
+      lines_by_key[key] = lines_by_key[key] or {}
+      table.insert(lines_by_key[key], t)
     end
   end
   for _, t in ipairs(orig.tasks) do
     local id = ctx.orig_tasks[t.line]
     if id and not kept[id] then
-      tasks_by_text[t.description] = tasks_by_text[t.description] or {}
-      table.insert(tasks_by_text[t.description], id)
+      local key = whole(t)
+      tasks_by_key[key] = tasks_by_key[key] or {}
+      table.insert(tasks_by_key[key], id)
     end
   end
-  for text, ts in pairs(lines_by_text) do
-    local ids = tasks_by_text[text]
+  for key, ts in pairs(lines_by_key) do
+    local ids = tasks_by_key[key]
     if #ts == 1 and ids and #ids == 1 then
       kept[ids[1]] = true
       match[ts[1]] = ids[1]
+      changes.relink = changes.relink or {}
+      changes.relink[ts[1].line] = ids[1]
     end
   end
 

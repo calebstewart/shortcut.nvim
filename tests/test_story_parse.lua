@@ -815,7 +815,15 @@ T['diff()']['tasks']['a line without a mark is matched to a task with the same t
     create = {},
     delete = {},
   })
-  -- Moved (ddp): the only task left with that text.
+  -- Replaced in place, with the invalidated mark on the next line (where it really ends up).
+  c = changes(function(lines)
+    lines[23] = '- [x] Open task'
+  end, { marks = { [22] = 311, [24] = 313 }, invalid = { [24] = { 312 } } })
+  eq(assert(c).tasks.update, {
+    { id = 312, line = 23, description = 'Open task', fields = { complete = true } },
+  })
+  eq(assert(c).relink, { [23] = 312 })
+  -- Moved (ddp): the only task left that reads the same.
   c = changes(function(lines)
     lines[22], lines[23] = lines[23], lines[22]
   end, { marks = { [22] = 312, [24] = 313 }, invalid = { [22] = { 311 } } })
@@ -859,6 +867,17 @@ T['diff()']['tasks']['matching by text only when unambiguous'] = function()
   end, { story = s, marks = { [24] = 313 }, invalid = { [24] = { 311, 312 } } })
   eq(#assert(c).tasks.create, 2)
   eq(#assert(c).tasks.delete, 2)
+  -- Matching by text alone needs the whole task to be the same: deleting the completed,
+  -- owned `Same` and adding an open `Same` elsewhere is a delete (asked about) plus a new task.
+  c = changes(function(lines)
+    table.remove(lines, 22)
+    table.insert(lines, 24, '- [ ] Same')
+  end, { story = s, marks = { [22] = 312, [23] = 313 }, invalid = { [22] = { 311 } } })
+  eq(assert(c).tasks, {
+    update = {},
+    create = { { line = 24, fields = { description = 'Same', complete = false } } },
+    delete = { { id = 311, description = 'Same' } },
+  })
 end
 
 T['diff()']['tasks']['a mark on a line that is no longer a task deletes the task'] = function()

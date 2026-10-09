@@ -442,6 +442,10 @@ local function run(st)
   vim.diagnostic.reset(story.edit_ns(), buf)
 
   if diff.is_empty(changes) then
+    -- Nothing is reloaded: mark the lines that lost their mark (e.g. moved with `ddp`) again.
+    if changes.relink then
+      story.relink(buf, changes.relink)
+    end
     notify.info(('sc-%d: no changes'):format(id))
     return nil
   end

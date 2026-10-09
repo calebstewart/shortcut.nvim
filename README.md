@@ -268,8 +268,11 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
 - Tasks are matched to lines by invisible marks, so editing a line in place (`cc`, `:s`,
   `:move`, inserting text) keeps it the same task. A line that loses its mark because it was
   deleted and put back (`dd` then `p`) or replaced (as plugins that toggle checkboxes may do)
-  is matched by its text: to the task whose line was there, or else to the only task left with
-  that description. A copy (`yyp`) is a new task.
+  is matched by its text: a replaced line to the task whose line it replaced, if the
+  description is the same (the checkbox and owners may differ), and a moved line to the only
+  task left that reads exactly the same (checkbox and owners included). Anything else, such as
+  deleting a task and typing a similar line elsewhere, is a deleted task plus a new one, and the
+  delete prompt asks. A copy (`yyp`) is a new task.
 - **Deleting tasks** asks first (unless `tasks.confirm_delete = false`), listing them:
   **Delete** saves everything; **Keep tasks** saves everything else and the tasks come back
   with the reload; **Cancel save** (also `<Esc>`) sends nothing and keeps your edits.

@@ -730,6 +730,31 @@ function M.invalid_task_marks(buf)
   return out
 end
 
+--- Mark lines again as the tasks they were matched to (after their marks were invalidated):
+--- each task's old mark is replaced by a new one on its line.
+---@param buf integer
+---@param links table<integer, integer> 1-based line -> task ID.
+function M.relink(buf, links)
+  local snap = snapshots[buf]
+  if not snap then
+    return
+  end
+  local ns = M.tasks_ns()
+  local count = vim.api.nvim_buf_line_count(buf)
+  for line, id in pairs(links) do
+    if line <= count then
+      for mark, task in pairs(snap.task_marks) do
+        if task == id then
+          snap.task_marks[mark] = nil
+          pcall(vim.api.nvim_buf_del_extmark, buf, ns, mark)
+        end
+      end
+      local mark = vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, { invalidate = true })
+      snap.task_marks[mark] = id
+    end
+  end
+end
+
 --- Put the cursor of every window showing `buf` on `line` (1-based).
 ---@param buf integer
 ---@param line integer

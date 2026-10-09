@@ -587,6 +587,27 @@ T['tasks']['a line replaced or moved by deleting it keeps its task'] = function(
   eq(child.lua_get('#_G.server.tasks'), 3)
 end
 
+T['tasks']['a deleted task is not revived by a different new line with its text'] = function()
+  child.lua([[_G.server.tasks[3].description = 'Done task']])
+  child.cmd('edit!')
+  child.lua('vim.wait(20); _G.wait_loaded()')
+  eq(vim.list_slice(lines(), 22, 23), { '- [x] Done task · @jdoe', '- [ ] Done task' })
+  -- Delete the completed, owned one; add an open one without owners at the end.
+  child.api.nvim_win_set_cursor(0, { 22, 0 })
+  child.cmd('normal! dd')
+  child.api.nvim_buf_set_lines(0, 23, 23, false, { '- [ ] Done task' })
+  write()
+  eq(child.lua_get('_G.confirms[1].msg'), 'Delete 1 task(s) from sc-301?\n  - Done task')
+  eq(writes(), {
+    {
+      method = 'POST',
+      path = '/stories/301/tasks',
+      body = { description = 'Done task', complete = false },
+    },
+    { method = 'DELETE', path = '/stories/301/tasks/311' },
+  })
+end
+
 T['tasks']['a replaced line with other text is a new task'] = function()
   child.lua([[require('shortcut').setup({ tasks = { confirm_delete = false } })]])
   child.api.nvim_buf_set_lines(0, 22, 23, false, { '- [ ] Something else' })
