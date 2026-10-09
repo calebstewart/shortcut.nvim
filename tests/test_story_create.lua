@@ -747,7 +747,7 @@ T[':w']['a failed request keeps the draft'] = function()
   child.cmd('write')
   eq(#posts(), 1)
   eq(last_message(), {
-    msg = 'shortcut.nvim: could not create the story: POST /stories: HTTP 400: nope',
+    msg = 'shortcut.nvim: could not create the story: POST /stories: HTTP 400: nope; nothing was created',
     level = ERROR,
   })
   eq(child.api.nvim_buf_get_name(0), 'shortcut://story/new-1')
@@ -839,6 +839,118 @@ T[':w']['a second write while it is being created sends nothing'] = function()
   eq(#posts(), 1)
 end
 
+T[':w']['an answer that may have created it requires :w! to send again'] = function()
+  local cases = {
+    {
+      res = { error = 'request timed out', timed_out = true },
+      why = 'POST /stories: request timed out',
+    },
+    { res = { status = 500, body = '{"message":"oops"}' }, why = 'POST /stories: HTTP 500: oops' },
+    {
+      res = { status = 201, body = 'not json' },
+      why = 'POST /stories: HTTP 201: the response is not valid JSON',
+    },
+    { res = { status = 201, body = '{}' }, why = 'POST /stories answered without the new story' },
+  }
+  for i, case in ipairs(cases) do
+    child.lua('_G.writes = {}')
+    open(nil, i)
+    child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+    child.lua([[_G.fail['POST /stories'] = ...]], { case.res })
+    child.cmd('write')
+    eq(#posts(), 1)
+    eq(last_message(), {
+      msg = 'shortcut.nvim: the story may have been created ('
+        .. case.why
+        .. '): check Shortcut before sending it again. The draft is kept; :w refuses to send it '
+        .. 'again, :w! sends it anyway',
+      level = ERROR,
+    })
+    eq(child.bo.modified, true)
+    eq(child.bo.modifiable, true)
+    -- :w and :wq send nothing more, and don't close it.
+    child.lua([[_G.fail['POST /stories'] = nil]])
+    child.cmd('write')
+    eq(#posts(), 1)
+    eq(last_message(), {
+      msg = 'shortcut.nvim: not sent: the last attempt may have created the story already. '
+        .. 'Check Shortcut; :w! sends it again (possibly creating it twice)',
+      level = ERROR,
+    })
+    child.cmd('split')
+    child.cmd('wq')
+    eq(#child.api.nvim_list_wins(), 2)
+    eq(#posts(), 1)
+    child.cmd('only')
+    -- :w! does.
+    child.cmd('write!')
+    child.lua('_G.wait_story(...)', { 900 + i })
+    eq(#posts(), 2)
+    eq(child.api.nvim_buf_get_name(0), 'shortcut://story/' .. (900 + i))
+  end
+end
+
+T[':w']['a definite refusal needs no :w!'] = function()
+  open()
+  child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+  child.lua([[_G.fail['POST /stories'] = { status = 422, body = '{"message":"bad"}' }]])
+  child.cmd('write')
+  eq(last_message().msg:find('HTTP 422: bad; nothing was created', 1, true) ~= nil, true)
+  child.lua([[_G.fail['POST /stories'] = nil]])
+  child.cmd('write')
+  child.lua('_G.wait_story(901)')
+  eq(#posts(), 2)
+end
+
+T[':w'][':e! while it is being created keeps what is sent'] = function()
+  open()
+  fill(filled())
+  child.lua([[create.WRITE_WAIT = 50; _G.hold['POST /stories'] = true
+    _G.fail['POST /stories'] = { status = 500, body = '{"message":"oops"}' }]])
+  child.cmd('write')
+  eq(#posts(), 1)
+  child.cmd('edit!')
+  eq(lines(), filled())
+  eq(child.bo.modified, true)
+  eq(child.bo.modifiable, false)
+  eq(child.bo.filetype, 'markdown')
+  child.lua('_G.held[1](); vim.wait(500, function() return not create.is_creating() end, 5)')
+  eq(lines(), filled())
+  eq(child.bo.modified, true)
+  eq(child.bo.modifiable, true)
+  eq(
+    last_message().msg:find(
+      'the story may have been created (POST /stories: HTTP 500: oops)',
+      1,
+      true
+    ) ~= nil,
+    true
+  )
+  -- Not lost: closing it still asks.
+  eq(pcall(child.cmd, 'quit'), false)
+end
+
+T[':w']['stopping before the story is sent sends nothing'] = function()
+  open('epic=678')
+  child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+  child.lua([[create.WRITE_WAIT = 50; _G.hold['GET /epics/678'] = true]])
+  child.cmd('write')
+  eq(last_message(), {
+    msg = 'shortcut.nvim: stopped before the story was sent: nothing was sent',
+    level = WARN,
+  })
+  eq(child.lua_get('create.is_creating()'), false)
+  eq(child.bo.modifiable, true)
+  eq(child.bo.modified, true)
+  child.lua('for _, h in ipairs(_G.held) do h() end; vim.wait(100)')
+  eq(posts(), {})
+  -- And it can be written again.
+  child.lua([[_G.hold = {}; create.WRITE_WAIT = nil]])
+  child.cmd('write')
+  child.lua('_G.wait_story(901)')
+  eq(#posts(), 1)
+end
+
 T[':w']['closing follows the usual rules'] = function()
   open()
   child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
@@ -854,7 +966,13 @@ end
 T[':w'][':e! goes back to the template'] = function()
   open('type=bug')
   child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+  child.lua([[_G.ft = 0
+    vim.api.nvim_create_autocmd('FileType', { callback = function() _G.ft = _G.ft + 1 end })]])
   child.cmd('edit!')
+  -- The filetype is set again, so highlighting attaches to the new text.
+  eq(child.lua_get('_G.ft'), 1)
+  eq(child.bo.filetype, 'markdown')
+  eq(child.bo.modeline, false)
   eq(lines()[2], 'type: bug')
   eq(lines()[10], '# ')
   eq(child.bo.modified, false)

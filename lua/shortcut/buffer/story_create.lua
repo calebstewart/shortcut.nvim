@@ -24,7 +24,12 @@
 ---   - The write waits for the answer (at most `write_wait()`; `<C-c>` stops waiting): on success
 ---     the buffer is no longer modified, so `:wq`/`:x` go on to close it; on failure it stays
 ---     modified, so they don't. The buffer is not modifiable meanwhile, and another write while
----     the story is being created sends nothing: a story is never created twice.
+---     the story is being created sends nothing. `:e!` meanwhile keeps what is being sent.
+---   - Stopping the wait (`<C-c>`) before `POST /stories` is sent cancels the checks before it:
+---     nothing is sent. Once it is sent, the story's buffer opens when it is created.
+---   - Only a request refused before being sent, or answered with a 4xx, certainly created
+---     nothing. Any other failure (no answer, a timeout, a 5xx, a 2xx without the story) may have
+---     created the story: the draft is kept, and only `:w!` sends it again.
 ---   - Once created, every window showing the draft switches to `shortcut://story/<id>` and the
 ---     draft is wiped.
 ---
@@ -78,6 +83,8 @@ local M = {}
 ---@field template string[] The lines it was opened with (`:e!` goes back to them).
 ---@field show_owners boolean
 ---@field created? integer The story created from it.
+---@field sending? string[] The lines being sent, while the story is being created.
+---@field uncertain? string Set when a create may or may not have happened (why): only `:w!` sends again.
 
 --- Keys of `:Shortcut create key=value`, in completion order.
 M.KEYS =
@@ -481,14 +488,22 @@ function M.reset(buf)
   if not d then
     return
   end
-  if creating[buf] then
-    notify.warn('the story is being created: the draft was not reset')
-    return
-  end
   vim.bo[buf].buftype = 'acwrite'
   vim.bo[buf].modeline = false
-  set_lines(buf, d.template)
-  vim.diagnostic.reset(story.edit_ns(), buf)
+  if creating[buf] and d.sending then
+    -- Neovim has emptied the buffer already: put back what is being sent, still modified (it is
+    -- not saved yet) and read-only (it is still being sent).
+    set_lines(buf, d.sending)
+    vim.bo[buf].modified = true
+    vim.bo[buf].modifiable = false
+    notify.warn('the story is being created: the draft was kept as it is being sent')
+  else
+    set_lines(buf, d.template)
+    vim.diagnostic.reset(story.edit_ns(), buf)
+  end
+  -- A read sets the filetype again (as filetype detection would), so that highlighting (e.g.
+  -- treesitter) attaches to the new text.
+  vim.bo[buf].filetype = 'markdown'
 end
 
 --- Longest wait for the answer when writing a draft, in milliseconds. `nil`: three requests'
@@ -534,13 +549,14 @@ end
 --- Synchronous: uses the lookup lists already loaded.
 ---@param buf? integer Defaults to the current buffer.
 ---@param lookup? shortcut.story_diff.Lookup Defaults to the cache's.
+---@param lines? string[] Defaults to the buffer's.
 ---@return shortcut.story_diff.Create? create `nil` if the draft could not be parsed.
 ---@return shortcut.story_parse.Error[] errors
-function M.body(buf, lookup)
+function M.body(buf, lookup, lines)
   buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf --[[@as integer]]
   local d = assert(drafts[buf], 'not a draft')
   local parse = require('shortcut.buffer.story_parse')
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  lines = lines or vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local cur, errors = parse.parse(lines, { draft = true, show_owners = d.show_owners })
   if not cur then
     return nil, errors
@@ -583,25 +599,73 @@ local function finish(buf, id)
   notify.info(('Created sc-%d (:Shortcut yank copies its link)'):format(id))
 end
 
---- Create the story of a draft. `on_done(err, id)` runs on the main loop once it is created or
---- has failed; the draft is left as it is either way.
+--- Whether a failed `POST /stories` certainly created nothing: it was refused before being sent
+--- (no token, invalid arguments), or answered with a 4xx. Anything else (no answer, a timeout,
+--- a 5xx, a 2xx that can't be read) may have created the story.
+---@param err shortcut.http.Error
+---@return boolean
+local function not_created(err)
+  if err.kind == 'auth' or err.kind == 'invalid' then
+    return true
+  end
+  return err.kind == 'http'
+    and type(err.status) == 'number'
+    and err.status >= 400
+    and err.status < 500
+end
+
+--- The message for an outcome that may have created the story.
+---@param why string
+---@return string
+local function uncertain_message(why)
+  return (
+    'the story may have been created (%s): check Shortcut before sending it again. '
+    .. 'The draft is kept; :w refuses to send it again, :w! sends it anyway'
+  ):format(why)
+end
+
+---@class shortcut.create.Outcome
+---@field err? string
+---@field id? integer
+---@field uncertain? boolean The story may have been created.
+
+---@class shortcut.create.Handle
+---@field posting fun(): boolean Whether `POST /stories` has been sent.
+---@field cancel fun(): boolean Stop before `POST /stories` is sent (`false` if it was already). `on_done` is not called.
+
+--- Create the story of a draft from its current lines. `on_done(outcome)` runs on the main loop
+--- once it is created or has failed; the draft is left as it is either way.
 ---@param buf integer
----@param on_done fun(err?: string, id?: integer)
+---@param on_done fun(outcome: shortcut.create.Outcome)
+---@return shortcut.create.Handle
 local function create(buf, on_done)
   local http = require('shortcut.http')
+  local d = drafts[buf]
   creating[buf] = true
+  -- What is created is what is in the buffer now (`:e!` meanwhile puts it back).
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  d.sending = lines
   local modifiable = vim.bo[buf].modifiable
-  -- What is created is what is in the buffer.
   vim.bo[buf].modifiable = false
-  async.run(function()
+  local posting = false
+
+  local function cleanup()
+    creating[buf] = nil
+    d.sending = nil
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.bo[buf].modifiable = modifiable
+    end
+  end
+
+  local task = async.run(function()
     async.await(require('shortcut.cache').load, story.REF_KINDS)
     if not vim.api.nvim_buf_is_loaded(buf) then
-      return 'the draft was closed; nothing was sent'
+      return { err = 'the draft was closed; nothing was sent' }
     end
-    local c, errors = M.body(buf)
+    local c, errors = M.body(buf, nil, lines)
     if #errors > 0 or not c then
       show_errors(buf, errors)
-      return error_summary(errors)
+      return { err = error_summary(errors) }
     end
     if c.epic then
       local eerr = async.await(require('shortcut.api.epics').get, c.epic.id)
@@ -609,34 +673,67 @@ local function create(buf, on_done)
         if eerr.status == 404 then
           local e = { line = c.epic.line, message = ('epic: no epic %d'):format(c.epic.id) }
           show_errors(buf, { e })
-          return error_summary({ e })
+          return { err = error_summary({ e }) }
         end
-        return ('could not check the epic: %s; nothing was sent'):format(http.format_error(eerr))
+        return {
+          err = ('could not check the epic: %s; nothing was sent'):format(http.format_error(eerr)),
+        }
       end
     end
     vim.diagnostic.reset(story.edit_ns(), buf)
+    posting = true
     local perr, data = async.await(require('shortcut.api.stories').create, c.body)
     if perr then
-      return http.format_error(perr)
+      if not_created(perr) then
+        return { err = ('%s; nothing was created'):format(http.format_error(perr)) }
+      end
+      return { err = uncertain_message(http.format_error(perr)), uncertain = true }
     end
     if type(data) ~= 'table' or type(data.id) ~= 'number' then
-      -- It may well have been created: say so rather than inviting a second try.
-      return 'unexpected response from POST /stories: the story may have been created; check Shortcut before writing again'
+      return {
+        err = uncertain_message('POST /stories answered without the new story'),
+        uncertain = true,
+      }
     end
-    return nil, data.id
-  end, function(thrown, err, id)
-    creating[buf] = nil
-    if vim.api.nvim_buf_is_valid(buf) then
-      vim.bo[buf].modifiable = modifiable
-    end
+    return { id = data.id }
+  end, function(thrown, outcome)
+    cleanup()
     if thrown then
-      err = (tostring(thrown):gsub('^[^\n]-:%d+: ', '', 1))
+      local msg = (tostring(thrown):gsub('^[^\n]-:%d+: ', '', 1))
+      outcome = posting and { err = uncertain_message(msg), uncertain = true } or { err = msg }
     end
-    if id and drafts[buf] then
-      drafts[buf].created = id
+    ---@cast outcome shortcut.create.Outcome
+    if outcome.id then
+      d.created = outcome.id
+    elseif outcome.uncertain then
+      d.uncertain = outcome.err
     end
-    on_done(err, id)
+    on_done(outcome)
   end)
+
+  return {
+    posting = function()
+      return posting
+    end,
+    cancel = function()
+      if posting or task:is_done() then
+        return false
+      end
+      task:cancel()
+      cleanup()
+      return true
+    end,
+  }
+end
+
+--- The message for a failed create.
+---@param outcome shortcut.create.Outcome
+---@return string
+local function failure(outcome)
+  if outcome.uncertain then
+    return outcome.err --[[@as string]]
+  end
+  return ('could not create the story: %s'):format(outcome.err)
 end
 
 --- The `BufWriteCmd` of a draft.
@@ -670,19 +767,30 @@ function M.on_write(ev)
     notify.warn(('%s was not created: only :w in its window creates the story'):format(name))
     return
   end
+  if d.uncertain and vim.v.cmdbang ~= 1 then
+    -- Left modified, so `:wq`/`:x` don't close it.
+    notify.error(
+      (
+        'not sent: the last attempt may have created the story already. Check Shortcut; '
+        .. ':w! sends it again (possibly creating it twice)'
+      )
+    )
+    return
+  end
+  d.uncertain = nil
 
-  local result ---@type { err?: string, id?: integer }?
+  local result ---@type shortcut.create.Outcome?
   local in_write = true
-  create(buf, function(err, id)
+  local handle = create(buf, function(outcome)
     if in_write then
-      result = { err = err, id = id }
+      result = outcome
       return
     end
     -- After the write returned (it stopped waiting).
-    if err then
-      notify.error(('could not create the story: %s'):format(err))
-    elseif id then
-      finish(buf, id)
+    if outcome.err then
+      notify.error(failure(outcome))
+    elseif outcome.id then
+      finish(buf, outcome.id)
     end
   end)
   if creating[buf] then
@@ -694,12 +802,17 @@ function M.on_write(ev)
   end
   in_write = false
   if not result then
-    -- Interrupted, or no answer yet: still modified, and the window switches once created.
+    -- Interrupted (`<C-c>`), or no answer yet.
+    if handle.cancel() then
+      notify.warn('stopped before the story was sent: nothing was sent')
+      return
+    end
+    -- Already sent: still modified, and the window switches once created.
     notify.warn('the story is still being created; its buffer opens once it is')
     return
   end
   if result.err then
-    notify.error(('could not create the story: %s'):format(result.err))
+    notify.error(failure(result))
     return
   end
   local id = result.id --[[@as integer]]

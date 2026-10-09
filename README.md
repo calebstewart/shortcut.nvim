@@ -478,10 +478,15 @@ Writing a draft:
   `:w shortcut://story/<id>`, `:1,2w file`) fails with an error and sends nothing. So do
   `:wall`, `:wqa` and `:xa` run from another window: the draft stays modified, so `:wqa` and
   `:xa` don't exit.
-- The write waits for Shortcut's answer (`<C-c>` stops waiting; the story is still created, and
-  its buffer opens once it is). If it fails, the draft stays open and modified with the error,
-  so `:wq` and `:x` don't close it. While the story is being created the draft is read-only,
-  and writing it again sends nothing: a draft never creates two stories.
+- The write waits for Shortcut's answer. `<C-c>` stops waiting: before the story is sent (while
+  the lookup lists load or the epic is checked) nothing is sent; once it is sent, it is still
+  created and its buffer opens when it is. If it fails, the draft stays open and modified with
+  the error, so `:wq` and `:x` don't close it. While the story is being created the draft is
+  read-only, writing it again sends nothing, and `:e!` keeps what is being sent.
+- Only a request refused before it was sent, or answered with a 4xx error, certainly created
+  nothing. Any other failure (no answer, a timeout, a server error, a success answer without the
+  story) may have created it: you are told to check Shortcut, and `:w` refuses to send the
+  draft again until you confirm with `:w!`.
 - Otherwise a draft is an ordinary modified buffer: Neovim's usual rules keep you from losing
   it by accident (`E37`/`E162`), `:q!` and `:bwipeout!` discard it, and `:e!` puts the
   template back.
