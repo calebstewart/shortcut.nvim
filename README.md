@@ -108,8 +108,24 @@ users could see it with `ps`.
 ### Health check
 
 `:checkhealth shortcut` reports the Neovim and `curl` versions, where the token comes from (with
-only its last four characters shown), whether it works (by asking the API who you are), and
-whether snacks.nvim is installed.
+only its last four characters shown), whether it works (by asking the API who you are), what the
+lookup-list cache holds (see below), and whether snacks.nvim is installed.
+
+### Lookup-list cache
+
+Stories and epics refer to workflow states, members, labels, teams and iterations by ID. To show
+names (and turn names back into IDs when you edit), shortcut.nvim fetches these lists once and
+caches them, in memory and in `stdpath('cache')/shortcut/<workspace>/refs.json` (e.g.
+`~/.cache/nvim/shortcut/<workspace>/refs.json`). Each workspace has its own file, so switching
+tokens never mixes them up. Lists are refetched after `cache.ttl` seconds (a day by default); if
+that fails, the old copy is used. The file is readable only by you (it contains member names, but
+not the token or email addresses). `:checkhealth shortcut` shows how old each list is.
+
+To fetch everything again now (e.g. after adding a label), clear the cache:
+
+```lua
+require('shortcut.cache').clear()
+```
 
 ## Commands
 
