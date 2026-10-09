@@ -213,7 +213,9 @@ local function check_routing()
     )
   end
 
-  if status.includeexpr == 'global' then
+  if not enabled then
+    vim.health.info('`gf` on sc-<id> is turned off too (sc_ids = false); on links it still works')
+  elseif status.includeexpr == 'global' then
     vim.health.ok("`gf` on sc-<id> works in buffers without their own 'includeexpr'")
   else
     vim.health.info(

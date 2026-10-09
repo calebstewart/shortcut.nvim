@@ -98,10 +98,15 @@ T['reports the routing of links and sc-<id>'] = function()
   end
   has(report, 'the current story can come from the git branch')
 
-  child.lua([[require('shortcut').setup({ sc_ids = false }); vim.go.includeexpr = 'MyExpr()']])
+  child.lua([[vim.go.includeexpr = 'MyExpr()']])
+  has(checkhealth(), "the global 'includeexpr' is set elsewhere (MyExpr())")
+
+  child.lua([[require('shortcut').setup({ sc_ids = false })]])
   report = checkhealth()
   has(report, '`:e sc-<id>` is turned off (sc_ids = false)')
-  has(report, "the global 'includeexpr' is set elsewhere (MyExpr())")
+  has(report, '`gf` on sc-<id> is turned off too (sc_ids = false)')
+  eq(report:find('`gf` on sc-<id> works', 1, true), nil)
+  eq(report:find("'includeexpr' is set elsewhere", 1, true), nil)
 end
 
 T['warns about an unguarded built-in https:// handler'] = function()
