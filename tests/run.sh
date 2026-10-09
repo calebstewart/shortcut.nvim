@@ -9,7 +9,8 @@
 set -u
 
 NVIM_BIN=${NVIM_BIN:-nvim}
-JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
+# Empty or 0 (as Nix's NIX_BUILD_CORES may be): one per CPU.
+case ${JOBS:-} in '' | *[!0-9]* | 0) JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null) ;; esac
 case $JOBS in '' | *[!0-9]* | 0) JOBS=4 ;; esac
 
 cd "$(dirname "$0")/.." || exit 1

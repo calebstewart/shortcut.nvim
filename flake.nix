@@ -195,7 +195,8 @@
               chmod -R u+w src
               cd src
               export HOME="$TMPDIR"
-              make test
+              # Test files run in parallel, as many as the build may use.
+              make test JOBS="''${NIX_BUILD_CORES:-0}"
               touch $out
             '';
 
