@@ -21,7 +21,9 @@ local notify = require('shortcut.notify')
 local M = {}
 
 --- How long the cursor must stay on an item before its preview is fetched, in milliseconds.
-M.PREVIEW_DELAY = 100
+--- Together with `shortcut.picker.PREVIEW_RATE`, this keeps previews well within the API's
+--- rate limit while moving through the list.
+M.PREVIEW_DELAY = 300
 
 --- Prefix of the snacks source names (`shortcut_search`, `shortcut_mine`, `shortcut_epics`).
 M.SOURCE_PREFIX = 'shortcut_'
@@ -139,8 +141,8 @@ local function cancel_preview(state)
   end
 end
 
---- The previewer: the item rendered like its buffer, fetched (after `PREVIEW_DELAY`) with the
---- full object, or from the session cache. Shows "Loading…" meanwhile; a result for an item
+--- The previewer: the item rendered like its buffer, fetched (after `PREVIEW_DELAY`, and within
+--- `shortcut.picker.PREVIEW_RATE`) with the full object, or from the session cache. Shows "Loading…" meanwhile; a result for an item
 --- that is no longer previewed is dropped.
 ---@param state shortcut.picker.snacks.State
 ---@return fun(ctx: table)
@@ -164,8 +166,15 @@ function M.preview(state)
         and not ctx.picker.closed
         and preview.win:buf_valid()
     end
-    vim.defer_fn(function()
+    local function fetch()
       if not current() then
+        return
+      end
+      local wait = core.preview_wait()
+      if wait > 0 then
+        -- Too many previews fetched in the last minute: try again when one is allowed.
+        preview:set_lines({ 'Loading… (waiting: many previews were fetched in the last minute)' })
+        vim.defer_fn(fetch, wait)
         return
       end
       state.pending = core.preview_lines(item, function(err, lines)
@@ -180,7 +189,8 @@ function M.preview(state)
         ---@cast lines string[]
         show(preview, item, lines)
       end)
-    end, M.PREVIEW_DELAY)
+    end
+    vim.defer_fn(fetch, M.PREVIEW_DELAY)
   end
 end
 

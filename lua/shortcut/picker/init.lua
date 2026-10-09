@@ -94,7 +94,7 @@ end
 ---@field state_type? string `backlog`, `unstarted`, `started`, `done`, or another type.
 ---@field story_type? string
 ---@field owners string[] Mention names.
----@field url? string The web app link, if it is an `https://` URL.
+---@field url? string The result's web app link, if it checks out (see `safe_url()`).
 
 --- Epics' deprecated `state` field, for when the epic workflow is not available.
 local LEGACY_EPIC_STATES = { ['to do'] = 'unstarted', ['in progress'] = 'started', done = 'done' }
@@ -105,11 +105,20 @@ local function present(v)
   return v ~= nil and v ~= vim.NIL
 end
 
---- A URL that is safe to open or copy: `https://`, one line, no spaces.
+--- A result's `app_url`, if it is safe to open or copy: an `https://` link to this very object
+--- in the Shortcut web app (`shortcut.uri` recognises it as `kind`/`id`, with a workspace), made
+--- only of URL characters (no spaces, control or non-ASCII characters). Like `:Shortcut yank`
+--- and `:Shortcut browse`, anything else is replaced by a link built from the workspace slug.
 ---@param v any
+---@param kind shortcut.Kind
+---@param id integer
 ---@return string?
-function M.safe_url(v)
-  if type(v) ~= 'string' or not v:match('^https://[^%s%c]+$') then
+function M.safe_url(v, kind, id)
+  if type(v) ~= 'string' or not v:match("^https://[%w%-%._~:/?#%[%]@!$&'()*+,;=%%]+$") then
+    return nil
+  end
+  local target = require('shortcut.uri').parse(v)
+  if not target or not target.workspace or target.kind ~= kind or target.id ~= id then
     return nil
   end
   return v
@@ -143,6 +152,9 @@ function M.make_item(kind, obj)
     end
     story_type = type(obj.story_type) == 'string' and one_line(obj.story_type) or nil
   else
+    if type(obj.name) == 'string' then
+      M.remember_epic_name(obj.id, obj.name)
+    end
     local st = present(obj.epic_state_id) and cache.epic_state(obj.epic_state_id) or nil
     if st then
       state, state_type = st.name, st.type
@@ -177,7 +189,7 @@ function M.make_item(kind, obj)
     state_type = state_type,
     story_type = story_type,
     owners = owners,
-    url = M.safe_url(obj.app_url),
+    url = M.safe_url(obj.app_url, OBJECT_KIND[kind], obj.id),
   }
 end
 
@@ -343,54 +355,194 @@ end
 --- Previews kept per session.
 M.PREVIEW_CACHE_SIZE = 50
 
----@type table<string, string[]>
+--- How long a cached preview is used, in seconds. Changes made elsewhere (the web app, or
+--- `:Shortcut state` on a story whose buffer isn't open) show up after this.
+M.PREVIEW_TTL = 300
+
+--- At most this many previews are fetched per minute (each costs one or two requests; the API
+--- allows 200 per minute in all).
+M.PREVIEW_RATE = 40
+
+---@class shortcut.picker.CachedPreview
+---@field lines string[]
+---@field at integer `vim.uv.now()` when fetched.
+---@field generation integer `cache.generation()` when fetched.
+
+---@type table<string, shortcut.picker.CachedPreview>
 local preview_cache = {}
 ---@type string[] Keys, oldest first.
 local preview_order = {}
 
----@param item shortcut.picker.Item
+--- Epic names by ID, for story previews (from epic searches and fetched epics).
+---@type table<integer, string>
+local epic_names = {}
+
+--- `vim.uv.now()` of the preview fetches of the last minute, oldest first.
+---@type integer[]
+local fetch_times = {}
+
+---@param kind shortcut.Kind
+---@param id integer
 ---@return string
-local function preview_key(item)
-  return item.kind .. ':' .. item.id
+local function preview_key(kind, id)
+  return kind .. ':' .. id
 end
 
---- The cached preview of an item, if any.
+--- The cached preview of an item, if any and still valid.
 ---@param item shortcut.picker.Item
 ---@return string[]?
 function M.cached_preview(item)
-  return preview_cache[preview_key(item)]
+  local key = preview_key(item.kind, item.id)
+  local entry = preview_cache[key]
+  if not entry then
+    return nil
+  end
+  if
+    vim.uv.now() - entry.at >= M.PREVIEW_TTL * 1000
+    or entry.generation ~= require('shortcut.cache').generation()
+  then
+    preview_cache[key] = nil
+    return nil
+  end
+  return entry.lines
+end
+
+--- Forget the cached preview of an object, e.g. because its buffer was saved or reloaded.
+---@param kind shortcut.Kind
+---@param id integer
+function M.invalidate_preview(kind, id)
+  preview_cache[preview_key(kind, id)] = nil
 end
 
 ---@param key string
 ---@param lines string[]
-local function remember(key, lines)
+---@param generation integer
+local function remember(key, lines, generation)
   if not preview_cache[key] then
+    preview_order = vim.tbl_filter(function(k)
+      return k ~= key and preview_cache[k] ~= nil
+    end, preview_order)
     table.insert(preview_order, key)
     while #preview_order > M.PREVIEW_CACHE_SIZE do
       preview_cache[table.remove(preview_order, 1)] = nil
     end
   end
-  preview_cache[key] = lines
+  preview_cache[key] = { lines = lines, at = vim.uv.now(), generation = generation }
+end
+
+--- Milliseconds to wait before the next preview fetch is allowed (0: now). See `PREVIEW_RATE`.
+---@return integer
+function M.preview_wait()
+  local now = vim.uv.now()
+  while fetch_times[1] and now - fetch_times[1] >= 60000 do
+    table.remove(fetch_times, 1)
+  end
+  if #fetch_times < M.PREVIEW_RATE then
+    return 0
+  end
+  return 60000 - (now - fetch_times[1])
+end
+
+---@param kind 'story'|'epic'
+---@param id integer
+---@param err shortcut.http.Error
+---@return string
+local function fetch_error(kind, id, err)
+  if err.status == 404 then
+    return ('%s sc-%d not found'):format(kind, id)
+  end
+  return require('shortcut.http').format_error(err)
+end
+
+--- Fetch a story for its preview: the story and the lookup lists, then its epic's name unless
+--- it is known already.
+---@param id integer
+---@param callback fun(err?: string, story?: table, epic?: shortcut.story.Epic)
+---@return { cancel: fun() }
+local function fetch_story(id, callback)
+  local handles = {} ---@type { cancel: fun(self: any) }[]
+  local cancelled = false
+  local pending = 2
+  local story ---@type table?
+  local failed = false
+  local function finish()
+    if cancelled or failed then
+      return
+    end
+    ---@cast story table
+    local epic_id = story.epic_id
+    if type(epic_id) ~= 'number' then
+      return callback(nil, story)
+    end
+    if epic_names[epic_id] then
+      return callback(nil, story, { id = epic_id, name = epic_names[epic_id] })
+    end
+    table.insert(
+      handles,
+      require('shortcut.api.epics').get(epic_id, function(err, data)
+        if not err and type(data) == 'table' and type(data.name) == 'string' then
+          epic_names[epic_id] = data.name
+        end
+        callback(nil, story, { id = epic_id, name = epic_names[epic_id] })
+      end)
+    )
+  end
+  table.insert(
+    handles,
+    require('shortcut.api.stories').get(id, function(err, data)
+      if err or type(data) ~= 'table' or data.id == nil then
+        failed = true
+        return callback(
+          err and fetch_error('story', id, err)
+            or ('unexpected response from GET /stories/%d'):format(id)
+        )
+      end
+      story = data
+      pending = pending - 1
+      if pending == 0 then
+        finish()
+      end
+    end)
+  )
+  table.insert(
+    handles,
+    require('shortcut.cache').load(require('shortcut.buffer.story').REF_KINDS, function()
+      -- Without the lists, IDs are shown instead of names.
+      pending = pending - 1
+      if pending == 0 then
+        finish()
+      end
+    end)
+  )
+  return {
+    cancel = function()
+      cancelled = true
+      for _, h in ipairs(handles) do
+        pcall(h.cancel, h)
+      end
+    end,
+  }
 end
 
 --- Fetch the full object behind an item and render it as its buffer would show it.
 --- `callback(err, lines)` runs on the main loop, unless the returned handle is cancelled first.
---- Results are cached for the session (`PREVIEW_CACHE_SIZE` items).
+--- Results are cached (see `PREVIEW_CACHE_SIZE`, `PREVIEW_TTL`); a fetch counts towards
+--- `PREVIEW_RATE`.
 ---@param item shortcut.picker.Item
 ---@param callback fun(err?: string, lines?: string[])
 ---@return { cancel: fun() }
 function M.preview_lines(item, callback)
-  local key = preview_key(item)
+  local key = preview_key(item.kind, item.id)
   local cancelled = false
   local function deliver(err, lines)
     if not cancelled then
       callback(err, lines)
     end
   end
-  if preview_cache[key] then
-    local lines = preview_cache[key]
+  local cached = M.cached_preview(item)
+  if cached then
     vim.schedule(function()
-      deliver(nil, lines)
+      deliver(nil, cached)
     end)
     return {
       cancel = function()
@@ -398,10 +550,12 @@ function M.preview_lines(item, callback)
       end,
     }
   end
+  table.insert(fetch_times, vim.uv.now())
+  local generation = require('shortcut.cache').generation()
   local handle
   if item.kind == 'story' then
     local story = require('shortcut.buffer.story')
-    handle = story.fetch(item.id, function(err, obj, epic)
+    handle = fetch_story(item.id, function(err, obj, epic)
       if err then
         return deliver(err)
       end
@@ -411,7 +565,7 @@ function M.preview_lines(item, callback)
       if not ok then
         return deliver(tostring(lines))
       end
-      remember(key, lines)
+      remember(key, lines, generation)
       deliver(nil, lines)
     end)
   else
@@ -420,11 +574,15 @@ function M.preview_lines(item, callback)
       if err then
         return deliver(err)
       end
+      ---@cast obj table
+      if type(obj.name) == 'string' then
+        epic_names[item.id] = obj.name
+      end
       local ok, lines = pcall(epic.render, obj, stories, epic.cache_refs())
       if not ok then
         return deliver(tostring(lines))
       end
-      remember(key, lines)
+      remember(key, lines, generation)
       deliver(nil, lines)
     end)
   end
@@ -438,9 +596,16 @@ function M.preview_lines(item, callback)
   }
 end
 
---- Forget cached previews (for tests).
+--- Remember an epic's name from a search result, for story previews.
+---@param id integer
+---@param name string
+function M.remember_epic_name(id, name)
+  epic_names[id] = name
+end
+
+--- Forget cached previews, epic names and the fetch rate (for tests).
 function M._clear_preview_cache()
-  preview_cache, preview_order = {}, {}
+  preview_cache, preview_order, epic_names, fetch_times = {}, {}, {}, {}
 end
 
 ---------------------------------------------------------------------------------------------------
@@ -472,41 +637,69 @@ function M.open(item, cmd)
   end
 end
 
+--- An item's web link: its (checked) `app_url`, or one built from the workspace slug of the
+--- token, as `:Shortcut yank` does. `callback(err, url)` runs on the main loop.
+---@param item shortcut.picker.Item
+---@param callback fun(err?: string, url?: string)
+function M.web_url(item, callback)
+  if item.url then
+    return vim.schedule(function()
+      callback(nil, item.url)
+    end)
+  end
+  local http = require('shortcut.http')
+  http.user(function(err, user)
+    if err or not user then
+      return callback(
+        ('cannot build the link of sc-%d: %s'):format(
+          item.id,
+          err and http.format_error(err) or 'unknown workspace'
+        )
+      )
+    end
+    callback(
+      nil,
+      ('https://app.shortcut.com/%s/%s/%d'):format(
+        http.encode_component(user.url_slug),
+        item.kind,
+        item.id
+      )
+    )
+  end)
+end
+
 --- Copy an item's web link, like `:Shortcut yank`: to the unnamed register and the clipboard.
 ---@param item shortcut.picker.Item
----@return boolean ok
 function M.copy_url(item)
-  if not item.url then
-    notify.error(('sc-%d has no web link'):format(item.id))
-    return false
-  end
-  local regs = require('shortcut.actions').copy(item.url)
-  local where = #regs > 1
-      and ('registers %s'):format(table.concat(
-        vim.tbl_map(function(r)
-          return '"' .. r
-        end, regs),
-        ' '
-      ))
-    or 'the unnamed register (no clipboard available)'
-  notify.info(('copied %s to %s'):format(item.url, where))
-  return true
+  M.web_url(item, function(err, url)
+    if err or not url then
+      return notify.error(err or 'no link')
+    end
+    local regs = require('shortcut.actions').copy(url)
+    local where = #regs > 1
+        and ('registers %s'):format(table.concat(
+          vim.tbl_map(function(r)
+            return '"' .. r
+          end, regs),
+          ' '
+        ))
+      or 'the unnamed register (no clipboard available)'
+    notify.info(('copied %s to %s'):format(url, where))
+  end)
 end
 
 --- Open an item's web link in the browser.
 ---@param item shortcut.picker.Item
----@return boolean ok
 function M.browse(item)
-  if not item.url then
-    notify.error(('sc-%d has no web link'):format(item.id))
-    return false
-  end
-  local _, err = vim.ui.open(item.url)
-  if err then
-    notify.error(('could not open the link: %s'):format(err))
-    return false
-  end
-  return true
+  M.web_url(item, function(err, url)
+    if err or not url then
+      return notify.error(err or 'no link')
+    end
+    local _, open_err = vim.ui.open(url)
+    if open_err then
+      notify.error(('could not open %s: %s'):format(url, open_err))
+    end
+  end)
 end
 
 ---------------------------------------------------------------------------------------------------

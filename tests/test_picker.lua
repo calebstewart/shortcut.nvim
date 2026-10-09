@@ -273,6 +273,7 @@ T['items']['server strings are flattened to one line'] = function()
     owner_ids = { JDOE, ALEX },
     app_url = 'https://app.shortcut.com/x/story/7',
   })
+  eq(it.url, 'https://app.shortcut.com/x/story/7')
   eq(it.name, 'Line one line two three')
   eq(it.state, 'Done')
   eq(it.state_type, 'done')
@@ -294,9 +295,37 @@ T['items']['unknown states and members'] = function()
   eq(it.url, nil)
 end
 
-T['items']['only https links are kept'] = function()
-  for _, url in ipairs({ 'javascript:alert(1)', 'http://x', 'https://a b', 'https://a\nb', 42 }) do
-    eq(item('stories', { id = 1, name = 'x', app_url = url }).url, nil)
+T['items']['only web app links to the same object are kept'] = function()
+  local function url(kind, id, app_url)
+    return item(kind, { id = id, name = 'x', app_url = app_url }).url
+  end
+  eq(
+    url('stories', 7, 'https://app.shortcut.com/ws/story/7'),
+    'https://app.shortcut.com/ws/story/7'
+  )
+  eq(
+    url('stories', 7, 'https://app.shortcut.com/ws/story/7/some-slug'),
+    'https://app.shortcut.com/ws/story/7/some-slug'
+  )
+  eq(
+    url('epics', 201, 'https://app.shortcut.com/ws/epic/201'),
+    'https://app.shortcut.com/ws/epic/201'
+  )
+  for _, hostile in ipairs({
+    'https://evil.example/phish',
+    'https://evil.example/ws/story/7',
+    'https://app.shortcut.com.evil.example/ws/story/7',
+    'https://app.shortcut.com@evil.example/ws/story/7',
+    'https://app.shortcut.com/ws/story/8', -- another story
+    'https://app.shortcut.com/ws/epic/7', -- another kind
+    'http://app.shortcut.com/ws/story/7',
+    'https://app.shortcut.com/ws\226\128\174/story/7', -- a bidi override
+    'https://app.shortcut.com/w s/story/7',
+    'https://app.shortcut.com/ws/story/7\n',
+    'javascript:alert(1)',
+    42,
+  }) do
+    eq(url('stories', 7, hostile), nil)
   end
 end
 
@@ -449,6 +478,64 @@ T['preview_lines()']['the cache is bounded'] = function()
   eq(child.lua_get('picker.cached_preview({ kind = "epic", id = 202 }) ~= nil'), true)
 end
 
+T['preview_lines()']["an epic's name is fetched once per session"] = function()
+  child.lua([[_G.overrides['/stories/102'] = { status = 200, fixture = 'story' }]])
+  local r = preview_lines('story', 101)
+  eq(vim.tbl_contains(r.lines, 'epic: 201 Example Epic'), true)
+  eq(count('/epics/201'), 1)
+  -- Another story of the same epic.
+  r = preview_lines('story', 102)
+  eq(vim.tbl_contains(r.lines, 'epic: 201 Example Epic'), true)
+  eq(count('/epics/201'), 1)
+end
+
+T['preview_lines()']['epic names from epic searches are used'] = function()
+  child.lua([[
+    picker._clear_preview_cache()
+    picker.make_item('epics', { id = 201, name = 'Searched Epic', epic_state_id = 522 })
+  ]])
+  local r = preview_lines('story', 101)
+  eq(vim.tbl_contains(r.lines, 'epic: 201 Searched Epic'), true)
+  eq(count('/epics/201'), 0)
+end
+
+T['preview_lines()']['cached previews expire'] = function()
+  preview_lines('story', 101)
+  child.lua('picker.PREVIEW_TTL = 0')
+  eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 })'), vim.NIL)
+  preview_lines('story', 101)
+  eq(count('/stories/101'), 2)
+end
+
+T['preview_lines()']['clearing the lookup-list cache (:Shortcut refresh) drops previews'] = function()
+  preview_lines('epic', 202)
+  child.lua([[require('shortcut.cache').clear()]])
+  eq(child.lua_get('picker.cached_preview({ kind = "epic", id = 202 })'), vim.NIL)
+  preview_lines('epic', 202)
+  eq(count('/epics/202'), 2)
+end
+
+T['preview_lines()']['invalidate_preview() drops one preview'] = function()
+  preview_lines('story', 101)
+  preview_lines('epic', 202)
+  child.lua([[picker.invalidate_preview('story', 101)]])
+  eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 })'), vim.NIL)
+  eq(child.lua_get('picker.cached_preview({ kind = "epic", id = 202 }) ~= nil'), true)
+end
+
+T['preview_lines()']['fetches are rate limited; cached previews are not'] = function()
+  child.lua('picker.PREVIEW_RATE = 2')
+  eq(child.lua_get('picker.preview_wait()'), 0)
+  preview_lines('story', 101)
+  eq(child.lua_get('picker.preview_wait()'), 0)
+  preview_lines('epic', 202)
+  local wait = child.lua_get('picker.preview_wait()')
+  eq(wait > 59000 and wait <= 60000, true)
+  -- From the cache: not counted.
+  preview_lines('story', 101)
+  eq(count('/stories/101'), 1)
+end
+
 T['preview_lines()']['cancelling drops the result'] = function()
   child.lua([[
     _G.overrides['/stories/101'] = { status = 200, fixture = 'story_render', hold = true }
@@ -467,7 +554,10 @@ end
 T['actions'] = new_set()
 
 T['actions']['copy the web link'] = function()
-  child.lua([[picker.copy_url({ id = 1, url = 'https://app.shortcut.com/x/story/1' })]])
+  child.lua(
+    [[picker.copy_url({ kind = 'story', id = 1, url = 'https://app.shortcut.com/x/story/1' })]]
+  )
+  child.lua('vim.wait(200, function() return #_G.messages > 0 end, 2)')
   eq(child.lua_get([[_G.clipboard['+'] ]]), { 'https://app.shortcut.com/x/story/1' })
   eq(child.fn.getreg('"'), 'https://app.shortcut.com/x/story/1')
   eq(
@@ -482,11 +572,39 @@ T['actions']['open in the browser'] = function()
   child.lua([[
     _G.opened = {}
     vim.ui.open = function(url) table.insert(_G.opened, url); return {}, nil end
-    picker.browse({ id = 1, url = 'https://app.shortcut.com/x/story/1' })
-    picker.browse({ id = 2 })
+    picker.browse({ kind = 'story', id = 1, url = 'https://app.shortcut.com/x/story/1' })
+    vim.wait(200, function() return #_G.opened == 1 end, 2)
+    -- Without a (trusted) link, one is built from the token's workspace.
+    picker.browse({ kind = 'epic', id = 2 })
+    vim.wait(2000, function() return #_G.opened == 2 end, 2)
   ]])
-  eq(child.lua_get('_G.opened'), { 'https://app.shortcut.com/x/story/1' })
-  eq(messages()[1].msg, 'shortcut.nvim: sc-2 has no web link')
+  eq(
+    child.lua_get('_G.opened'),
+    { 'https://app.shortcut.com/x/story/1', 'https://app.shortcut.com/acme/epic/2' }
+  )
+  eq(messages(), {})
+end
+
+T['actions']['a hostile app_url is never copied or opened'] = function()
+  child.lua([[
+    _G.opened = {}
+    vim.ui.open = function(url) table.insert(_G.opened, url); return {}, nil end
+    local item = picker.make_item('stories', { id = 7, name = 'x', app_url = 'https://evil.example/phish' })
+    picker.browse(item)
+    picker.copy_url(item)
+    vim.wait(2000, function() return #_G.opened == 1 and #_G.messages == 1 end, 2)
+  ]])
+  eq(child.lua_get('_G.opened'), { 'https://app.shortcut.com/acme/story/7' })
+  eq(child.fn.getreg('"'), 'https://app.shortcut.com/acme/story/7')
+end
+
+T['actions']['without a workspace, no link'] = function()
+  child.lua([[
+    _G.overrides['/member'] = { status = 500 }
+    picker.copy_url({ kind = 'story', id = 7 })
+    vim.wait(2000, function() return #_G.messages > 0 end, 2)
+  ]])
+  eq(messages()[1].msg:find('^shortcut.nvim: cannot build the link of sc%-7: ') ~= nil, true)
 end
 
 T['actions']['open, in the current window or a split'] = function()
@@ -772,6 +890,18 @@ T['snacks']['the preview renders the full story, without modelines'] = function(
   eq(child.lua_get('preview_lines()')[2], 'id: 301')
 end
 
+T['snacks']['previews wait when too many were fetched in the last minute'] = function()
+  child.lua('picker.PREVIEW_RATE = 1')
+  child.cmd('Shortcut search example')
+  child.lua('wait_items(3)')
+  child.lua([[vim.wait(2000, function() return preview_lines()[1] == '---' end, 5)]])
+  child.lua([[current():action('list_down'); vim.wait(200)]])
+  eq(child.lua_get('preview_lines()'), {
+    'Loading… (waiting: many previews were fetched in the last minute)',
+  })
+  eq(count('/stories/102'), 0)
+end
+
 T['snacks']['confirm opens the buffer'] = function()
   child.cmd('Shortcut search example')
   child.lua('wait_items(3)')
@@ -799,6 +929,7 @@ T['snacks']['copy and browse keys'] = function()
     local p = current()
     p:action('shortcut_browse')
     p:action('shortcut_copy_url')
+    vim.wait(2000, function() return #_G.opened == 1 and _G.clipboard['+'] ~= nil end, 2)
   ]])
   eq(child.lua_get('_G.opened'), { 'https://app.shortcut.com/example-workspace/story/101' })
   eq(
