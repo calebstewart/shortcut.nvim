@@ -85,6 +85,8 @@ M.REF_KINDS = { 'workflows', 'members', 'labels', 'iterations' }
 ---@field id integer Task ID.
 ---@field line integer 1-based line number.
 
+--- Where things are in a render. To find the sections again in edited lines, use `sections()`:
+--- the markers are the last ones (a description may contain marker-like lines).
 ---@class shortcut.story.Meta
 ---@field header shortcut.story.Range The front matter, both `---` lines included.
 ---@field title integer The `# <name>` line.
@@ -113,6 +115,17 @@ local function days_from_civil(y, m, d)
   local doy = math.floor((153 * mp + 2) / 5) + d - 1
   local doe = yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy
   return era * 146097 + doe - 719468
+end
+
+--- One line: newlines in a single-line field become spaces. Every server string rendered on a
+--- single line goes through this: `nvim_buf_set_lines()` rejects lines containing newlines.
+---@param s any
+---@return string
+local function one_line(s)
+  if type(s) ~= 'string' then
+    return ''
+  end
+  return (s:gsub('\r\n?', '\n'):gsub('\n', ' '))
 end
 
 --- A string of digits as an integer.
@@ -157,7 +170,7 @@ end
 function M.format_time(s)
   local t = M.parse_time(s)
   if not t then
-    return type(s) == 'string' and s or '?'
+    return type(s) == 'string' and one_line(s) or '?'
   end
   return os.date('%Y-%m-%d %H:%M', t) --[[@as string]]
 end
@@ -171,7 +184,7 @@ end
 ---@param id any
 ---@return string
 function M.unknown(id)
-  return 'unknown-' .. tostring(id)
+  return 'unknown-' .. one_line(tostring(id))
 end
 
 ---@param v any
@@ -191,7 +204,7 @@ end
 ---@return string
 local function mention(refs, id)
   local m = refs.member and present(id) and refs.member(id)
-  return m and m.mention_name or M.unknown(id)
+  return one_line(m and m.mention_name or M.unknown(id))
 end
 
 --- Lines of a text, with CRLF/CR as LF.
@@ -203,16 +216,6 @@ local function text_lines(s)
   end
   s = s:gsub('\r\n?', '\n')
   return vim.split(s, '\n', { plain = true })
-end
-
---- One line: newlines in a single-line field become spaces.
----@param s any
----@return string
-local function one_line(s)
-  if type(s) ~= 'string' then
-    return ''
-  end
-  return (s:gsub('\r\n?', '\n'):gsub('\n', ' '))
 end
 
 --- The header fields of a story.
@@ -479,6 +482,37 @@ function M.render(story, refs, opts)
   return lines, meta --[[@as shortcut.story.Meta]]
 end
 
+--- Find the section markers in a story buffer's lines. A description may contain a line equal
+--- to a marker, but task and comment lines never do (they start with `- [`, `>`, `**@` or
+--- `*(`), so the **last** comments marker, and the last tasks marker before it, are the real
+--- ones. Lines are compared without surrounding whitespace.
+---@param lines string[]
+---@return { tasks_marker: integer, comments_marker: integer }? markers 1-based line numbers.
+---@return string? err If a marker is missing.
+function M.sections(lines)
+  local tasks, comments ---@type integer?, integer?
+  for i = #lines, 1, -1 do
+    local line = vim.trim(lines[i])
+    if not comments and line == M.COMMENTS_MARKER then
+      comments = i
+    elseif comments and line == M.TASKS_MARKER then
+      tasks = i
+      break
+    end
+  end
+  if not comments then
+    return nil, ("the line '%s' is missing"):format(M.COMMENTS_MARKER)
+  end
+  if not tasks then
+    return nil,
+      ("the line '%s' is missing (it must come before '%s')"):format(
+        M.TASKS_MARKER,
+        M.COMMENTS_MARKER
+      )
+  end
+  return { tasks_marker = tasks, comments_marker = comments }
+end
+
 ---------------------------------------------------------------------------------------------------
 -- Buffers
 ---------------------------------------------------------------------------------------------------
@@ -546,7 +580,13 @@ function M.tasks_ns()
 end
 
 --- The task extmarks of a buffer that are still valid: `{ task_id, row }` (0-based rows), in
---- buffer order. Editing uses these to match lines to tasks.
+--- buffer order. Editing uses these to match lines to tasks:
+---   - a task line without one is a new task; a task missing from the result was deleted,
+---   - at most one task per row: if lines were joined (`J`), several valid marks share a row,
+---     and only the task rendered first keeps it; the others count as deleted,
+---   - a mark follows its line when it is moved without being deleted (`:move`, `cc`, editing
+---     the text, `yyp` (the copy is new), `<CR>` at column 0). A line that is deleted and put
+---     back elsewhere (`ddp`) loses its mark: it reads as a deleted task plus a new one.
 ---@param buf? integer Defaults to the current buffer.
 ---@return { id: integer, row: integer }[]
 function M.task_marks(buf)
@@ -555,11 +595,23 @@ function M.task_marks(buf)
   if not snap then
     return {}
   end
-  local out = {}
+  local order = {} ---@type table<integer, integer> Task ID -> position in the render.
+  for i, t in ipairs(snap.meta.tasks) do
+    order[t.id] = i
+  end
+  local out = {} ---@type { id: integer, row: integer }[]
   for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, M.tasks_ns(), 0, -1, { details = true })) do
     local id, row, details = mark[1], mark[2], mark[4]
-    if snap.task_marks[id] and not (details and details.invalid) then
-      table.insert(out, { id = snap.task_marks[id], row = row })
+    local task = snap.task_marks[id]
+    if task and not (details and details.invalid) then
+      local last = out[#out]
+      if last and last.row == row then
+        if order[task] < order[last.id] then
+          last.id = task
+        end
+      else
+        table.insert(out, { id = task, row = row })
+      end
     end
   end
   return out

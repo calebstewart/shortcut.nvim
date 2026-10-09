@@ -221,7 +221,10 @@ Description…
   quoted; replies are nested one quote level deeper under the comment they answer. Deleted
   comments are left out (a deleted comment with replies shows as `*(deleted comment)*`).
 - The `<!-- shortcut:… -->` lines mark where the sections start, so a description containing
-  its own `## Tasks` heading is not confused with the tasks. Leave them in place.
+  its own `## Tasks` heading is not confused with the tasks. Leave them in place. If a
+  description itself contains such a line, the **last** comments marker and the last tasks
+  marker before it are the real ones.
+- Modelines are disabled in these buffers, so text from the server can never set options.
 - A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
 - `:e!` fetches the story again. Editing (`:w`) is not available yet: it reports so and keeps
   your changes in the buffer.

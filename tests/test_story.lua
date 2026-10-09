@@ -318,6 +318,50 @@ T['render()']['comments: deleted ones skipped, unless they have replies'] = func
   eq(r.meta.comments, { ['4'] = start, ['1'] = start + 3, ['2'] = start + 5, ['5'] = start + 8 })
 end
 
+T['render()']['server strings with newlines stay on one line'] = function()
+  local r = render(
+    ([[
+    s.comments = {
+      { id = 1, author_id = '%s', created_at = 'bad\ndate', deleted = false, text = 'x' },
+      { id = 2, author_id = 'odd\nid', created_at = '2026-03-01T10:00:00Z', deleted = false, text = 'y' },
+    }
+    s.owner_ids = { 'odd\nid' }
+    s.label_ids = { 1 }
+    s.labels = { { id = 1, name = 'two\nlines' } }
+    s.name = 'title\r\nhere'
+    s.tasks = { { id = 1, description = 'a\nb', complete = false, position = 1, owner_ids = { '%s', 'odd\nid' } } }
+  ]]):format(GONE, JDOE),
+    nil,
+    [[vim.tbl_extend('force', _G.refs, {
+      member = function(id) return { mention_name = 'mention\nname' } end,
+      epic = { id = 201, name = 'epic\nname' },
+    })]]
+  )
+  for i, line in ipairs(r.lines) do
+    eq({ i, line:find('\n') }, { i, nil })
+  end
+  eq(r.lines[5], 'owners: [mention name]')
+  eq(r.lines[6], 'epic: 201 epic name')
+  eq(r.lines[9], 'labels: ["two\\nlines"]')
+  eq(r.lines[12], '# title here')
+  eq(r.lines[r.meta.tasks[1].line], '- [ ] a b · @mention name @mention name')
+  eq(r.lines[r.meta.comments['1']], '**@mention name** · bad date')
+  -- Without names, the IDs themselves.
+  r = render(
+    [[
+    s.owner_ids = {}
+    s.comments = { { id = 2, author_id = 'odd\nid', created_at = '2026-03-01T10:00:00Z', deleted = false, text = 'y' } }
+    s.tasks = { { id = 1, description = 't', complete = false, position = 1, owner_ids = { 'odd\nid' } } }
+  ]],
+    nil,
+    '{}'
+  )
+  eq(r.lines[r.meta.tasks[1].line], '- [ ] t · @unknown-odd id')
+  eq(r.lines[r.meta.comments['2']], '**@unknown-odd id** · 2026-03-01 10:00')
+  -- And the lines can be set in a buffer.
+  child.lua('vim.api.nvim_buf_set_lines(0, 0, -1, false, ...)', { r.lines })
+end
+
 T['render()']['is pure: works in a fast event without touching buffers'] = function()
   local out = child.lua([[
     local bufs = vim.api.nvim_list_bufs()
@@ -332,6 +376,51 @@ T['render()']['is pure: works in a fast event without touching buffers'] = funct
     return { result = result, same_bufs = vim.deep_equal(bufs, vim.api.nvim_list_bufs()) }
   ]])
   eq(out, { result = { ok = true, n = #FULL, fast = true }, same_bufs = true })
+end
+
+T['sections()'] = new_set()
+
+T['sections()']['finds the markers of a render'] = function()
+  local r = render()
+  eq(
+    child.lua_get('story.sections(...)', { r.lines }),
+    { tasks_marker = r.meta.tasks_marker, comments_marker = r.meta.comments_marker }
+  )
+end
+
+T['sections()']['uses the last markers, so descriptions may contain marker lines'] = function()
+  local r = render([[
+    s.description = table.concat({
+      'Before',
+      '<!-- shortcut:comments (read-only) -->',
+      '  <!-- shortcut:tasks -->  ',
+      '<!-- shortcut:comments (read-only) -->',
+      'After',
+    }, '\n')
+    s.comments = { { id = 1, author_id = 'x', created_at = '2026-03-01T10:00:00Z', deleted = false,
+      text = '<!-- shortcut:comments (read-only) -->\n<!-- shortcut:tasks -->' } }
+    s.tasks = { { id = 1, description = '<!-- shortcut:tasks -->', complete = false, position = 1, owner_ids = {} } }
+  ]])
+  eq(r.lines[15], '<!-- shortcut:comments (read-only) -->')
+  eq(
+    child.lua_get('story.sections(...)', { r.lines }),
+    { tasks_marker = r.meta.tasks_marker, comments_marker = r.meta.comments_marker }
+  )
+  eq(r.meta.tasks_marker > r.meta.description.last, true)
+end
+
+T['sections()']['reports missing markers'] = function()
+  local function err(lines)
+    return child.lua('return { story.sections(...) }', { lines })
+  end
+  eq(
+    err({ '# t', '<!-- shortcut:tasks -->' }),
+    { vim.NIL, "the line '<!-- shortcut:comments (read-only) -->' is missing" }
+  )
+  eq(err({ '# t', '<!-- shortcut:comments (read-only) -->', '<!-- shortcut:tasks -->' }), {
+    vim.NIL,
+    "the line '<!-- shortcut:tasks -->' is missing (it must come before '<!-- shortcut:comments (read-only) -->')",
+  })
 end
 
 T['times'] = new_set()
@@ -482,6 +571,46 @@ T['buffer']['deleting a task line invalidates its extmark; undo restores it'] = 
   -- A new line has no mark.
   child.api.nvim_buf_set_lines(0, 24, 24, false, { '- [ ] new task' })
   eq(#child.lua_get('story.task_marks(0)'), 3)
+end
+
+T['buffer']['joined task lines keep only the first task'] = function()
+  edit('shortcut://story/301')
+  child.api.nvim_win_set_cursor(0, { 22, 0 })
+  child.cmd('normal! J')
+  eq(child.lua_get('story.task_marks(0)'), { { id = 311, row = 21 }, { id = 313, row = 22 } })
+  child.cmd('undo')
+  child.api.nvim_win_set_cursor(0, { 23, 0 })
+  child.cmd('normal! J')
+  eq(child.lua_get('story.task_marks(0)'), { { id = 311, row = 21 }, { id = 312, row = 22 } })
+end
+
+T['buffer']['modelines in story content are never applied'] = function()
+  child.lua([[
+    local s = vim.json.decode(_G.read_fixture('story_render'))
+    s.comments[1].text = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
+    s.name = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
+    _G.overrides['/stories/301'] = { status = 200, body = vim.json.encode(s) }
+  ]])
+  edit('shortcut://story/301')
+  eq(lines()[#lines()], '> vim: set ts=3 sw=3 tw=13 ft=lua :')
+  local before = child.lua_get('{ vim.bo.ts, vim.bo.sw, vim.bo.tw }')
+  eq(child.bo.modeline, false)
+  child.lua([[
+    vim.api.nvim_create_autocmd('User', { pattern = 'SomePluginEvent', callback = function() end })
+    vim.api.nvim_exec_autocmds('User', { pattern = 'SomePluginEvent' })
+    vim.cmd('doautocmd BufEnter')
+    vim.cmd('doautocmd BufRead')
+  ]])
+  eq(child.bo.filetype, 'markdown')
+  eq(child.lua_get('{ vim.bo.ts, vim.bo.sw, vim.bo.tw }'), before)
+  -- Nor in error messages.
+  child.lua(
+    [[_G.overrides['/stories/302'] = { status = 500, body = '{"message": "vim: set ft=lua :"}' }]]
+  )
+  edit('shortcut://story/302')
+  child.lua([[vim.cmd('doautocmd BufEnter')]])
+  eq(child.bo.modeline, false)
+  eq(child.bo.filetype, 'markdown')
 end
 
 T['buffer']['tasks.show_owners = false hides task owners'] = function()

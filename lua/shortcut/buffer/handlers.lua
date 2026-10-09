@@ -313,6 +313,10 @@ local function load(buf, target, opts)
     target.id
   vim.bo[buf].buftype = 'acwrite'
   vim.bo[buf].swapfile = false
+  -- The content comes from the server (comments, names...): never let it set options. Neovim
+  -- applies modelines again whenever an autocommand runs for the buffer with modelines enabled
+  -- (e.g. `:doautocmd`, or `nvim_exec_autocmds()` for some plugin's User event).
+  vim.bo[buf].modeline = false
   vim.b[buf].shortcut = { kind = kind, id = id }
   if vim.bo[buf].filetype ~= 'markdown' then
     vim.bo[buf].filetype = 'markdown'
