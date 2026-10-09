@@ -530,6 +530,13 @@ function M.state(id)
   return idx and idx[id] --[[@as shortcut.refs.State?]]
 end
 
+--- Every workflow, as last loaded, or `nil` if the list is not loaded.
+---@return shortcut.refs.Workflow[]?
+function M.workflows()
+  local entry = loaded('workflows')
+  return entry and entry.data or nil
+end
+
 --- A workflow by ID.
 ---@param id integer
 ---@return shortcut.refs.Workflow?

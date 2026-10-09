@@ -501,8 +501,35 @@ local function redirect_id(alias, id)
   end)
 end
 
+--- Whether `buf` is a comment buffer (`shortcut://story/<id>/comment`), which
+--- `shortcut.buffer.comment` reads and writes itself.
+---@param buf integer
+---@param name string
+---@return boolean is_comment_name
+---@return boolean owned Created by `shortcut.buffer.comment`.
+local function comment_buffer(buf, name)
+  if not uri.parse_comment_name(name) then
+    return false, false
+  end
+  return true, vim.b[buf].shortcut_comment ~= nil
+end
+
 ---@param ev vim.api.keyset.create_autocmd.callback_args
 local function on_read(ev)
+  local is_comment, owned = comment_buffer(ev.buf, ev.match)
+  if is_comment then
+    -- Never a story: there is nothing to load.
+    if not owned then
+      prepare_alias(ev.buf)
+      notify.error(
+        ('%s is not a file; use :Shortcut comment %d'):format(
+          ev.match,
+          uri.parse_comment_name(ev.match)
+        )
+      )
+    end
+    return
+  end
   local target = uri.parse(ev.match)
   if not target or target.workspace then
     notify.error(('not a Shortcut buffer name: %s'):format(ev.match))
@@ -529,6 +556,11 @@ end
 ---@param ev vim.api.keyset.create_autocmd.callback_args
 local function on_write(ev)
   local buf = ev.buf
+  local is_comment, owned = comment_buffer(buf, ev.match)
+  if is_comment and owned then
+    -- Posted by the comment buffer's own BufWriteCmd.
+    return
+  end
   local info = vim.b[buf].shortcut
   if vim.api.nvim_buf_get_name(buf) ~= ev.match or type(info) ~= 'table' then
     notify.error(('cannot write to %s'):format(ev.match))
@@ -733,6 +765,65 @@ function M.open(kind, id, opts)
   opts = opts or {}
   check_workspace(opts.workspace)
   edit(kind, id, { comment = opts.comment })
+end
+
+--- Load a story or epic buffer again, as `:e!` does (discarding any changes). Does nothing for
+--- other buffers.
+---@param buf integer
+---@return boolean reloaded
+function M.reload(buf)
+  if not vim.api.nvim_buf_is_loaded(buf) then
+    return false
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  local target = uri.parse(name)
+  if
+    not target
+    or not uri.is_kind(target.kind)
+    or uri.canonical(target.kind, target.id) ~= name
+  then
+    return false
+  end
+  load(buf, target, {})
+  return true
+end
+
+--- The loaded buffer of a story or epic, if there is one.
+---@param kind shortcut.Kind
+---@param id integer
+---@return integer?
+function M.find(kind, id)
+  local buf = find_buf(uri.canonical(kind, id))
+  if buf and vim.api.nvim_buf_is_loaded(buf) then
+    return buf
+  end
+  return nil
+end
+
+--- After `kind`/`id` changed on the server: reload its buffer if it is open and unmodified.
+---@param kind shortcut.Kind
+---@param id integer
+---@return 'reloaded'|'modified'|nil result `nil` if there is no such buffer.
+function M.reload_if_unmodified(kind, id)
+  local buf = M.find(kind, id)
+  if not buf then
+    return nil
+  end
+  if vim.bo[buf].modified then
+    return 'modified'
+  end
+  M.reload(buf)
+  return 'reloaded'
+end
+
+--- Whether `id` is a story or an epic, as `sc-<id>` is resolved (see `set_resolver()`).
+--- `done(kind)`, `done(nil)` if there is no such object, or `done(nil, err)`; on the main loop,
+--- or at once if the answer is known.
+---@param id integer
+---@param done fun(kind?: shortcut.Kind, err?: string)
+---@return { cancel: fun(self: any) }?
+function M.resolve_kind(id, done)
+  return resolve(id, done)
 end
 
 --- Create the autocommands. Called once when the plugin loads.

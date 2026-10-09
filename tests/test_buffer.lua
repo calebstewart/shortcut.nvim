@@ -975,10 +975,47 @@ T['commands']['pass the comment anchor and check the workspace'] = function()
   eq(#messages(), 1)
 end
 
-T['commands']['without an argument show usage'] = function()
-  child.cmd('Shortcut story')
-  eq(messages()[1].msg, 'shortcut.nvim: usage: :Shortcut story {id | sc-<id> | url}')
+T['commands'][':Shortcut epic without an argument shows usage'] = function()
+  child.cmd('Shortcut epic')
+  eq(messages()[1].msg, 'shortcut.nvim: usage: :Shortcut epic {id | sc-<id> | url}')
   eq(bufname(), 'start.txt')
+end
+
+T['commands'][':Shortcut story without an argument and outside git explains'] = function()
+  child.cmd('Shortcut story')
+  child.lua([[vim.wait(5000, function() return #_G.messages > 0 end, 10)]])
+  local msgs = messages()
+  eq(#msgs, 1)
+  eq(msgs[1].level, child.lua_get('vim.log.levels.ERROR'))
+  expect.no_error(function()
+    assert(msgs[1].msg:find('story: no story given, and none found in the git branch', 1, true))
+    assert(msgs[1].msg:find('not in a git repository', 1, true))
+    assert(msgs[1].msg:find('usage: :Shortcut story [id | sc-<id> | url]', 1, true))
+  end)
+  eq(bufname(), 'start.txt')
+end
+
+T['commands'][':Shortcut story without an argument opens the git branch story'] = function()
+  if child.fn.executable('git') == 0 then
+    MiniTest.skip('git is not installed')
+  end
+  child.lua([[
+    local function git(...)
+      local res = vim.system({ 'git', ... }, { cwd = _G.dir, text = true }):wait()
+      assert(res.code == 0, res.stderr)
+    end
+    git('init', '-q')
+    git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'x')
+    git('checkout', '-q', '-b', 'someone/sc-77/do-things')
+  ]])
+  -- From a story buffer: the branch's story, not the current one.
+  child.cmd('Shortcut story 5')
+  child.cmd('Shortcut story')
+  child.lua(
+    [[vim.wait(5000, function() return vim.api.nvim_buf_get_name(0) == 'shortcut://story/77' end, 10)]]
+  )
+  eq(cur_name(), 'shortcut://story/77')
+  eq(messages(), {})
 end
 
 T['commands']['reject invalid and mismatched arguments'] = function()

@@ -22,9 +22,20 @@ local M = {}
 --- Subcommands provided by feature modules that are loaded on first use.
 ---@type table<string, shortcut.LazySubcommand>
 M.lazy = {
-  story = { module = 'shortcut.buffer.commands', desc = 'Open a story by ID, sc-<id> or URL' },
+  story = {
+    module = 'shortcut.buffer.commands',
+    desc = "Open a story by ID, sc-<id> or URL (default: the git branch's)",
+  },
   epic = { module = 'shortcut.buffer.commands', desc = 'Open an epic by ID, sc-<id> or URL' },
   login = { module = 'shortcut.login', desc = 'Save an API token to the shared `short` CLI config' },
+  comment = { module = 'shortcut.actions', desc = 'Write a comment on the current story' },
+  state = { module = 'shortcut.actions', desc = 'Change the workflow state of the current story' },
+  browse = { module = 'shortcut.actions', desc = 'Open the current story or epic in the browser' },
+  yank = { module = 'shortcut.actions', desc = 'Copy the URL of the current story or epic' },
+  refresh = {
+    module = 'shortcut.actions',
+    desc = 'Fetch the lookup lists again and reload the current Shortcut buffer',
+  },
 }
 
 ---@type table<string, shortcut.Subcommand>
@@ -124,10 +135,11 @@ end
 function M.complete(arglead, cmdline, cursorpos)
   -- Drop the command name itself (which may be abbreviated or carry a bang).
   local typed = cmdline:sub(1, cursorpos):gsub('^%s*%S+', '', 1)
-  local words = vim.split(typed, '%s+', { trimempty = true })
-  if arglead ~= '' then
-    table.remove(words) -- the word currently being completed
+  -- Without the word being completed, which may contain escaped spaces (`In\ P`).
+  if arglead ~= '' and vim.endswith(typed, arglead) then
+    typed = typed:sub(1, #typed - #arglead)
   end
+  local words = vim.split(typed, '%s+', { trimempty = true })
 
   if #words == 0 then
     return vim.tbl_filter(function(name)

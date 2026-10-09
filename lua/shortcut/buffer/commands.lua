@@ -1,4 +1,5 @@
 --- `:Shortcut story` and `:Shortcut epic`: open an object by ID, `sc-<id>` or web URL.
+--- `:Shortcut story` with no argument opens the story named by the current git branch.
 local commands = require('shortcut.commands')
 local handlers = require('shortcut.buffer.handlers')
 local uri = require('shortcut.uri')
@@ -7,7 +8,7 @@ local notify = require('shortcut.notify')
 local M = {}
 
 local USAGE = {
-  story = 'usage: :Shortcut story {id | sc-<id> | url}',
+  story = 'usage: :Shortcut story [id | sc-<id> | url]',
   epic = 'usage: :Shortcut epic {id | sc-<id> | url}',
 }
 
@@ -40,8 +41,26 @@ end
 local function run(kind)
   return function(args)
     if #args == 0 then
-      -- TODO(#12): `:Shortcut story` with no argument opens the story for the git branch.
-      notify.info(USAGE[kind])
+      if kind == 'epic' then
+        notify.info(USAGE[kind])
+        return
+      end
+      -- The git branch's story. Not the current buffer's: that is already open.
+      require('shortcut.target').resolve(
+        nil,
+        { command = 'story', buffer = false },
+        function(err, target)
+          if err then
+            notify.error(('story: %s'):format(err))
+            return
+          end
+          ---@cast target shortcut.target.Target
+          local ok, open_err = pcall(handlers.open, 'story', target.id)
+          if not ok then
+            notify.error(('story: %s'):format(tostring(open_err)))
+          end
+        end
+      )
       return
     end
     if #args > 1 then
@@ -52,7 +71,10 @@ local function run(kind)
   end
 end
 
-commands.register('story', { desc = 'Open a story by ID, sc-<id> or URL', run = run('story') })
+commands.register('story', {
+  desc = "Open a story by ID, sc-<id> or URL (default: the git branch's)",
+  run = run('story'),
+})
 commands.register('epic', { desc = 'Open an epic by ID, sc-<id> or URL', run = run('epic') })
 
 return M
