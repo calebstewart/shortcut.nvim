@@ -1,0 +1,710 @@
+--- Buffer routing for Shortcut objects.
+---
+--- Every story and epic lives in exactly one buffer named `shortcut://<kind>/<id>`, read and
+--- written through `BufReadCmd`/`BufWriteCmd`. Other names for the same object (Shortcut web
+--- URLs, `sc-<id>`, `shortcut://id/<id>`) open a temporary buffer whose read handler switches
+--- every window showing it to the canonical buffer and then deletes it.
+---
+--- How objects are loaded and saved is pluggable: renderers call `register()` for their kind.
+--- Until then a placeholder is used.
+local notify = require('shortcut.notify')
+local uri = require('shortcut.uri')
+
+local M = {}
+
+---@class shortcut.buffer.LoadOpts
+---@field comment? integer Comment to jump to once loaded.
+
+---@class shortcut.buffer.SaveOpts
+---@field force boolean `true` for `:w!`.
+
+--- Called by a loader when it has finished. On success, `lines` (if given) replace the buffer
+--- contents; a loader that renders the buffer itself passes no lines, and must make the buffer
+--- modifiable while it writes (it is not modifiable while loading).
+---@alias shortcut.buffer.LoadDone fun(err?: string, lines?: string[])
+
+--- Called by a saver when it has finished. `'modified'` is cleared only on success.
+---@alias shortcut.buffer.SaveDone fun(err?: string)
+
+---@class shortcut.buffer.Handler
+---@field load fun(buf: integer, id: integer, opts: shortcut.buffer.LoadOpts, done: shortcut.buffer.LoadDone)
+---@field save? fun(buf: integer, id: integer, opts: shortcut.buffer.SaveOpts, done: shortcut.buffer.SaveDone)
+---@field jump? fun(buf: integer, comment: integer) Jump to a comment in an already-loaded buffer.
+
+--- Resolves the kind of an `sc-<id>`. Call `done('story'|'epic')`, `done(nil)` if no such
+--- object exists, or `done(nil, err)` on failure.
+---@alias shortcut.buffer.Resolver fun(id: integer, done: fun(kind?: shortcut.Kind, err?: string))
+
+--- Provides the user's workspace slug (`url_slug`), or `nil` if unknown.
+---@alias shortcut.buffer.SlugSource fun(done: fun(slug?: string))
+
+local GROUP = 'shortcut.buffer'
+local SC_GROUP = 'shortcut.buffer.sc_ids'
+local NET_GROUP = 'nvim.net.remotefile'
+local WEB_PATTERNS = { 'https://app.shortcut.com/*', 'http://app.shortcut.com/*' }
+local INCLUDEEXPR = "v:lua.require'shortcut.buffer.handlers'.includeexpr(v:fname)"
+local CHAINED_INCLUDEEXPR =
+  "v:lua.require'shortcut.buffer.handlers'.includeexpr(v:fname, b:shortcut_includeexpr)"
+local PLURAL = { story = 'stories', epic = 'epics' }
+
+---@param kind shortcut.Kind
+---@return shortcut.buffer.Handler
+local function placeholder(kind)
+  return {
+    load = function(_, id, _, done)
+      done(nil, {
+        ('# %s %d'):format(kind == 'story' and 'Story' or 'Epic', id),
+        '',
+        ('Rendering %s is not implemented yet.'):format(PLURAL[kind]),
+      })
+    end,
+    save = function(_, _, _, done)
+      done(('saving %s is not supported yet'):format(PLURAL[kind]))
+    end,
+  }
+end
+
+---@type table<shortcut.Kind, shortcut.buffer.Handler>
+local registry = { story = placeholder('story'), epic = placeholder('epic') }
+
+---@type shortcut.buffer.Resolver?
+local resolver = nil
+
+---@type table<integer, shortcut.Kind>
+local kind_cache = {}
+
+---@type shortcut.buffer.SlugSource?
+local slug_source = nil
+
+--- Options for the next load of a canonical name, set just before `:edit`ing it.
+---@type table<string, shortcut.buffer.LoadOpts>
+local pending = {}
+
+--- Incremented on every load of a buffer, so results of superseded loads are dropped.
+---@type table<integer, integer>
+local generation = {}
+
+--- State of the current load of each buffer. Only a `'loaded'` buffer may be saved: otherwise
+--- its contents are a loading or error message, not the object.
+---@type table<integer, 'loading'|'loaded'|'failed'>
+local load_state = {}
+
+--- Callbacks of the built-in net plugin that have been wrapped already.
+---@type table<function, true>
+local wrapped = {}
+
+--- Register how objects of `kind` are loaded and saved.
+---@param kind shortcut.Kind
+---@param handler shortcut.buffer.Handler
+function M.register(kind, handler)
+  vim.validate('kind', kind, function(k)
+    return uri.is_kind(k)
+  end, "'story' or 'epic'")
+  vim.validate('handler', handler, 'table')
+  vim.validate('handler.load', handler.load, 'function')
+  vim.validate('handler.save', handler.save, 'function', true)
+  vim.validate('handler.jump', handler.jump, 'function', true)
+  registry[kind] = handler
+end
+
+--- Set how `sc-<id>` is resolved to a story or an epic. Without a resolver, `sc-<id>` is
+--- assumed to be a story. Answers are remembered for the session.
+---@param fn shortcut.buffer.Resolver?
+function M.set_resolver(fn)
+  vim.validate('fn', fn, 'function', true)
+  resolver = fn
+  kind_cache = {}
+end
+
+--- Set where the user's workspace slug comes from. Without one, opening a URL for another
+--- workspace does not warn.
+---@param fn shortcut.buffer.SlugSource?
+function M.set_slug_source(fn)
+  vim.validate('fn', fn, 'function', true)
+  slug_source = fn
+end
+
+---@return boolean
+local function sc_ids_enabled()
+  return require('shortcut.config').get().sc_ids
+end
+
+--- Run `fn` on the main loop: soon if called from a fast event, otherwise now.
+---@param fn function
+local function main_loop(fn)
+  if vim.in_fast_event() then
+    vim.schedule(fn)
+  else
+    fn()
+  end
+end
+
+---@param name string
+---@return integer?
+local function find_buf(name)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_get_name(buf) == name then
+      return buf
+    end
+  end
+  return nil
+end
+
+--- Replace the contents of `buf` without recording undo history.
+---@param buf integer
+---@param lines string[]
+local function set_lines(buf, lines)
+  local undolevels = vim.bo[buf].undolevels
+  vim.bo[buf].undolevels = -1
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].undolevels = undolevels
+end
+
+--- Warn if a URL's workspace is not the user's.
+---@param workspace? string
+local function check_workspace(workspace)
+  if not workspace or not slug_source then
+    return
+  end
+  slug_source(function(slug)
+    if slug and slug:lower() ~= workspace:lower() then
+      main_loop(function()
+        notify.warn(
+          ("this link is for workspace '%s' but your token is for '%s'; it may not be accessible"):format(
+            workspace,
+            slug
+          )
+        )
+      end)
+    end
+  end)
+end
+
+--- Whether our web URL autocommand (`WEB_PATTERNS`) handles `name`. Like all autocommand
+--- patterns, those ignore case only if 'fileignorecase' is set.
+---@param name string
+---@return boolean
+local function is_routed_url(name)
+  if vim.o.fileignorecase then
+    name = name:lower()
+  end
+  if not name:match('^https?://app%.shortcut%.com/') then
+    return false
+  end
+  local target = uri.parse(name)
+  return target ~= nil and target.workspace ~= nil
+end
+
+--- Guard the built-in `nvim.net.remotefile` `BufReadCmd` handlers so they ignore Shortcut
+--- story/epic URLs instead of downloading the web page into the buffer. Idempotent; does nothing
+--- if that plugin is disabled.
+function M.guard_net_plugin()
+  local ok, autocmds = pcall(vim.api.nvim_get_autocmds, { group = NET_GROUP, event = 'BufReadCmd' })
+  for _, ac in ipairs(ok and autocmds or {}) do
+    local orig = ac.callback
+    if type(orig) == 'function' and not wrapped[orig] then
+      vim.api.nvim_del_autocmd(ac.id)
+      local function guarded(ev)
+        -- Skip exactly what our own handler switches away from; anything else (other pages,
+        -- or a host spelled in another case when our pattern doesn't match it) is fetched.
+        if is_routed_url(ev.match) then
+          return
+        end
+        return orig(ev)
+      end
+      wrapped[guarded] = true
+      vim.api.nvim_create_autocmd('BufReadCmd', {
+        group = ac.group,
+        pattern = ac.pattern,
+        desc = ac.desc,
+        callback = guarded,
+      })
+    end
+  end
+end
+
+---@param buf integer
+---@param target shortcut.uri.Target
+---@param opts shortcut.buffer.LoadOpts
+local function load(buf, target, opts)
+  local kind, id =
+    target.kind, --[[@as shortcut.Kind]]
+    target.id
+  vim.bo[buf].buftype = 'acwrite'
+  vim.bo[buf].swapfile = false
+  vim.b[buf].shortcut = { kind = kind, id = id }
+  if vim.bo[buf].filetype ~= 'markdown' then
+    vim.bo[buf].filetype = 'markdown'
+  end
+
+  generation[buf] = (generation[buf] or 0) + 1
+  local gen = generation[buf]
+  load_state[buf] = 'loading'
+
+  set_lines(buf, { ('Loading sc-%d…'):format(id) })
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].modified = false
+
+  local finished = false
+  ---@type shortcut.buffer.LoadDone
+  local function done(err, lines)
+    main_loop(function()
+      -- An unloaded buffer must stay unloaded: writing to it would load it again (and start a
+      -- new load). Unloading also bumps the generation, so a later reload ignores this result.
+      if finished or not vim.api.nvim_buf_is_loaded(buf) or generation[buf] ~= gen then
+        return
+      end
+      finished = true
+      load_state[buf] = err and 'failed' or 'loaded'
+      if err then
+        notify.error(('failed to load sc-%d: %s'):format(id, err))
+        local msg = { ('Failed to load sc-%d:'):format(id), '' }
+        vim.list_extend(msg, vim.split(tostring(err), '\n', { plain = true }))
+        set_lines(buf, msg)
+        -- Not editable, and on_write refuses to save it; `:e!` retries.
+        vim.bo[buf].modifiable = false
+      else
+        if lines then
+          set_lines(buf, lines)
+        end
+        vim.bo[buf].modifiable = true
+      end
+      vim.bo[buf].modified = false
+    end)
+  end
+
+  local handler = registry[kind]
+  local ok, err = pcall(handler.load, buf, id, opts, done)
+  if not ok then
+    done(tostring(err))
+  end
+end
+
+--- Open the canonical buffer for an object in the current window.
+---@param kind shortcut.Kind
+---@param id integer
+---@param opts? { comment?: integer, keepalt?: boolean }
+local function edit(kind, id, opts)
+  opts = opts or {}
+  local name = uri.canonical(kind, id)
+  local existing = find_buf(name)
+  local loaded = existing and vim.api.nvim_buf_is_loaded(existing)
+  pending[name] = { comment = opts.comment }
+  local ok, err = pcall(
+    vim.api.nvim_command,
+    (opts.keepalt and 'keepalt ' or '') .. 'edit ' .. vim.fn.fnameescape(name)
+  )
+  pending[name] = nil
+  if not ok then
+    error(err, 0)
+  end
+  local handler = registry[kind]
+  if loaded and opts.comment and handler.jump then
+    handler.jump(vim.api.nvim_get_current_buf(), opts.comment)
+  end
+end
+
+--- Switch every window showing the temporary buffer `alias` to `kind`/`id` (or, if `kind` is
+--- nil, back to the window's alternate buffer) and delete `alias`.
+---@param alias integer
+---@param kind? shortcut.Kind
+---@param id? integer
+---@param opts? { comment?: integer }
+local function replace(alias, kind, id, opts)
+  if not vim.api.nvim_buf_is_valid(alias) then
+    return
+  end
+  for _, win in ipairs(vim.fn.win_findbuf(alias)) do
+    vim.api.nvim_win_call(win, function()
+      if kind and id then
+        -- `keepalt` keeps the buffer the user came from as the alternate file, so `<C-^>` still
+        -- goes back once the temporary buffer is gone.
+        local ok, err = pcall(edit, kind, id, { comment = opts and opts.comment, keepalt = true })
+        if not ok then
+          notify.error(tostring(err))
+        end
+      else
+        local alt = vim.fn.bufnr('#')
+        if alt > 0 and alt ~= alias and vim.api.nvim_buf_is_valid(alt) then
+          pcall(vim.cmd.buffer, alt)
+        end
+      end
+    end)
+  end
+  pcall(vim.api.nvim_buf_delete, alias, { force = true })
+end
+
+--- Make a temporary buffer inert while it waits to be replaced.
+---@param buf integer
+local function prepare_alias(buf)
+  vim.bo[buf].buftype = 'nofile'
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].modified = false
+end
+
+---@param id integer
+---@param done fun(kind?: shortcut.Kind, err?: string)
+local function resolve(id, done)
+  if kind_cache[id] then
+    return done(kind_cache[id])
+  end
+  if not resolver then
+    -- No way to ask the API yet: assume a story.
+    return done('story')
+  end
+  local current = resolver
+  local ok, err = pcall(current, id, function(kind, rerr)
+    main_loop(function()
+      if kind and uri.is_kind(kind) and resolver == current then
+        kind_cache[id] = kind
+      end
+      done(kind, rerr)
+    end)
+  end)
+  if not ok then
+    done(nil, tostring(err))
+  end
+end
+
+--- Handle a temporary buffer for an object of unknown kind.
+---@param alias integer
+---@param id integer
+local function redirect_id(alias, id)
+  prepare_alias(alias)
+  vim.schedule(function()
+    resolve(id, function(kind, err)
+      if kind and uri.is_kind(kind) then
+        replace(alias, kind, id)
+        return
+      end
+      if err then
+        notify.error(('could not look up sc-%d: %s'):format(id, err))
+      else
+        notify.error(('sc-%d not found'):format(id))
+      end
+      replace(alias, nil)
+    end)
+  end)
+end
+
+---@param ev vim.api.keyset.create_autocmd.callback_args
+local function on_read(ev)
+  local target = uri.parse(ev.match)
+  if not target or target.workspace then
+    notify.error(('not a Shortcut buffer name: %s'):format(ev.match))
+    return
+  end
+  if target.kind == 'id' then
+    redirect_id(ev.buf, target.id)
+    return
+  end
+  local name = uri.canonical(target.kind, target.id)
+  if name ~= ev.match then
+    -- A non-canonical spelling, e.g. a leading zero.
+    prepare_alias(ev.buf)
+    vim.schedule(function()
+      replace(ev.buf, target.kind --[[@as shortcut.Kind]], target.id)
+    end)
+    return
+  end
+  local opts = pending[name] or {}
+  pending[name] = nil
+  load(ev.buf, target, opts)
+end
+
+---@param ev vim.api.keyset.create_autocmd.callback_args
+local function on_write(ev)
+  local buf = ev.buf
+  local info = vim.b[buf].shortcut
+  if vim.api.nvim_buf_get_name(buf) ~= ev.match or type(info) ~= 'table' then
+    notify.error(('cannot write to %s'):format(ev.match))
+    return
+  end
+  local kind, id = info.kind, info.id
+  -- 'nomodifiable' does not stop `:w`, and acwrite buffers are written even when unmodified.
+  local state = load_state[buf]
+  if state ~= 'loaded' then
+    notify.error(
+      state == 'loading' and ('sc-%d is still loading'):format(id)
+        or ('sc-%d is not loaded; :e! to retry'):format(id)
+    )
+    return
+  end
+  local handler = registry[kind]
+  if not handler or not handler.save then
+    notify.error(('saving %s is not supported'):format(PLURAL[kind] or kind))
+    return
+  end
+
+  local tick = vim.b[buf].changedtick
+  local finished = false
+  ---@type shortcut.buffer.SaveDone
+  local function done(err)
+    main_loop(function()
+      if finished then
+        return
+      end
+      finished = true
+      if err then
+        -- Reported even if the buffer has gone: the changes were not saved.
+        notify.error(('failed to save sc-%d: %s'):format(id, err))
+      elseif vim.api.nvim_buf_is_loaded(buf) and vim.b[buf].changedtick == tick then
+        vim.bo[buf].modified = false
+      end
+    end)
+  end
+
+  local ok, err = pcall(handler.save, buf, id, { force = vim.v.cmdbang == 1 }, done)
+  if not ok then
+    done(tostring(err))
+  end
+end
+
+---@param ev vim.api.keyset.create_autocmd.callback_args
+local function on_web_read(ev)
+  -- In case the net plugin was sourced after this one and before VimEnter (e.g. a URL given
+  -- on the command line). Its pending handler for this event is skipped once deleted.
+  M.guard_net_plugin()
+  if not is_routed_url(ev.match) then
+    -- Some other Shortcut page: leave it to the built-in handler.
+    return
+  end
+  local target = assert(uri.parse(ev.match))
+  prepare_alias(ev.buf)
+  check_workspace(target.workspace)
+  vim.schedule(function()
+    replace(ev.buf, target.kind --[[@as shortcut.Kind]], target.id, { comment = target.comment })
+  end)
+end
+
+--- Read a real file into `buf` as `:edit` would. Used for names matching `sc-[0-9]*` that are not
+--- `sc-<id>` references, since a `BufReadCmd` handler replaces Neovim's own reading.
+---@param buf integer
+---@param name string
+local function read_file(buf, name)
+  local stat = vim.uv.fs_stat(name)
+  if stat and stat.type == 'directory' then
+    return
+  end
+  if not stat then
+    vim.api.nvim_exec_autocmds('BufNewFile', { buffer = buf, modeline = false })
+    return
+  end
+
+  vim.api.nvim_buf_call(buf, function()
+    vim.api.nvim_exec_autocmds('BufReadPre', { buffer = buf, modeline = false })
+    local undolevels = vim.bo[buf].undolevels
+    vim.bo[buf].undolevels = -1
+    -- `++edit` detects 'fileformat', 'fileencoding', etc. as `:edit` would; `v:cmdarg` carries
+    -- any `++opt` given to the `:edit`. Skip FileReadPre/Post, which `:edit` does not fire, but
+    -- not other autocommands: SwapExists handlers (e.g. Neovim's default one) must still run.
+    local eventignore = vim.go.eventignore
+    vim.go.eventignore = (eventignore == '' and '' or eventignore .. ',')
+      .. 'FileReadPre,FileReadPost'
+    local ok, err = pcall(
+      vim.api.nvim_command,
+      ('keepalt read ++edit %s %s'):format(
+        vim.v.cmdarg,
+        -- Relative, so the file info message reads as it would for `:edit`.
+        vim.fn.fnameescape(vim.fn.fnamemodify(name, ':~:.'))
+      )
+    )
+    vim.go.eventignore = eventignore
+    if ok then
+      -- `:read` appends below the buffer's initial empty line.
+      vim.api.nvim_buf_set_lines(buf, 0, 1, false, {})
+    end
+    vim.bo[buf].undolevels = undolevels
+    vim.bo[buf].modified = false
+    if not ok then
+      notify.error(tostring(err))
+      return
+    end
+    if vim.fn.filewritable(name) == 0 then
+      vim.bo[buf].readonly = true
+    end
+    if vim.bo[buf].undofile then
+      vim.cmd('silent! rundo ' .. vim.fn.fnameescape(vim.fn.undofile(name)))
+    end
+    -- Filetype detection etc. Neovim applies modelines itself once this handler returns.
+    vim.api.nvim_exec_autocmds('BufReadPost', { buffer = buf, modeline = false })
+  end)
+end
+
+---@param ev vim.api.keyset.create_autocmd.callback_args
+local function on_sc_read(ev)
+  local name = ev.match
+  if name:match('^%a[%w+.-]*://') then
+    -- A URL whose last component looks like `sc-<n>`: its own handlers deal with it.
+    return
+  end
+  if sc_ids_enabled() then
+    -- The pattern matches the tail of any path, but only a bare `sc-<id>` as typed (`ev.file`;
+    -- `ev.match` is always a full path) is a reference; `notes/sc-42` is a file.
+    local target = uri.parse(ev.file)
+    if target and target.kind == 'id' and not vim.uv.fs_stat(name) then
+      redirect_id(ev.buf, target.id)
+      return
+    end
+  end
+  read_file(ev.buf, name)
+end
+
+--- `'includeexpr'` that makes `gf` work on `sc-<id>`: Neovim's `gf` only opens names that exist
+--- as files or look like URLs, so map `sc-<id>` to its not-yet-resolved `shortcut://` form.
+--- Any other name is passed to `fallback`, a Vimscript expression (evaluated with the same
+--- `v:fname`) or a Lua function, and returned unchanged if there is none.
+---@param fname string
+---@param fallback? string|fun(fname: string): string
+---@return string
+function M.includeexpr(fname, fallback)
+  local target = uri.parse(fname)
+  if target and target.kind == 'id' and sc_ids_enabled() then
+    return uri.canonical('id', target.id)
+  end
+  if type(fallback) == 'function' then
+    return fallback(fname)
+  end
+  if type(fallback) == 'string' and fallback ~= '' then
+    local ok, result = pcall(vim.fn.eval, fallback)
+    if ok and type(result) == 'string' then
+      return result
+    end
+  end
+  return fname
+end
+
+--- Make `gf` work on `sc-<id>` in a buffer that has its own 'includeexpr', by wrapping it: other
+--- names still go through the original expression (kept in `b:shortcut_includeexpr`).
+--- Idempotent.
+---@param buf? integer Defaults to the current buffer.
+function M.chain_includeexpr(buf)
+  buf = buf == nil and vim.api.nvim_get_current_buf() or buf
+  local current = vim.bo[buf].includeexpr
+  if current == INCLUDEEXPR or current == CHAINED_INCLUDEEXPR then
+    return
+  end
+  if current == '' then
+    vim.bo[buf].includeexpr = INCLUDEEXPR
+    return
+  end
+  vim.b[buf].shortcut_includeexpr = current
+  vim.bo[buf].includeexpr = CHAINED_INCLUDEEXPR
+end
+
+--- Register or remove the `sc-<id>` handler according to `config.sc_ids`.
+---@param enabled? boolean Defaults to the configured value.
+function M.sync_sc_ids(enabled)
+  if enabled == nil then
+    enabled = sc_ids_enabled()
+  end
+  local group = vim.api.nvim_create_augroup(SC_GROUP, { clear = true })
+  if enabled then
+    vim.api.nvim_create_autocmd('BufReadCmd', {
+      group = group,
+      pattern = 'sc-[0-9]*',
+      desc = 'shortcut.nvim: open sc-<id>',
+      -- So that autocommands triggered while reading a real file (SwapExists) run.
+      nested = true,
+      callback = on_sc_read,
+    })
+  end
+end
+
+--- Open an object in the current window.
+---@param kind shortcut.Kind
+---@param id integer
+---@param opts? { comment?: integer, workspace?: string }
+function M.open(kind, id, opts)
+  opts = opts or {}
+  check_workspace(opts.workspace)
+  edit(kind, id, { comment = opts.comment })
+end
+
+--- Create the autocommands. Called once when the plugin loads.
+function M.setup()
+  local group = vim.api.nvim_create_augroup(GROUP, { clear = true })
+  vim.api.nvim_create_autocmd('BufReadCmd', {
+    group = group,
+    pattern = 'shortcut://*',
+    desc = 'shortcut.nvim: load story/epic',
+    callback = on_read,
+  })
+  vim.api.nvim_create_autocmd('BufWriteCmd', {
+    group = group,
+    pattern = 'shortcut://*',
+    desc = 'shortcut.nvim: save story/epic',
+    callback = on_write,
+  })
+  vim.api.nvim_create_autocmd('BufReadCmd', {
+    group = group,
+    pattern = WEB_PATTERNS,
+    desc = 'shortcut.nvim: open Shortcut URL',
+    callback = on_web_read,
+  })
+  vim.api.nvim_create_autocmd('BufUnload', {
+    group = group,
+    pattern = 'shortcut://*',
+    callback = function(ev)
+      -- Invalidate any load in flight. Not reset to nil: a reload restarting the count could
+      -- match that load's generation again.
+      generation[ev.buf] = (generation[ev.buf] or 0) + 1
+      load_state[ev.buf] = nil
+    end,
+  })
+  vim.api.nvim_create_autocmd('BufWipeout', {
+    group = group,
+    pattern = 'shortcut://*',
+    callback = function(ev)
+      -- Buffer numbers are never reused.
+      generation[ev.buf] = nil
+    end,
+  })
+  -- Plugin managers source plugins in varying orders relative to $VIMRUNTIME/plugin.
+  vim.api.nvim_create_autocmd('VimEnter', {
+    group = group,
+    once = true,
+    callback = M.guard_net_plugin,
+  })
+  M.guard_net_plugin()
+
+  -- Don't load the config module at startup just to read the default; if the user called
+  -- setup() already it is loaded, and later setup() calls run sync_sc_ids() themselves.
+  local config = package.loaded['shortcut.config']
+  M.sync_sc_ids(config == nil or config.get().sc_ids)
+
+  -- Only where nothing else is set: buffer-local values (from ftplugins) take precedence.
+  if vim.go.includeexpr == '' then
+    vim.go.includeexpr = INCLUDEEXPR
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.bo[buf].includeexpr == '' then
+        vim.bo[buf].includeexpr = INCLUDEEXPR
+      end
+    end
+  end
+  -- Commit messages are where sc-<id> appears most, and the gitcommit ftplugin sets its own
+  -- 'includeexpr'. Chaining keeps its behaviour for every other name. Deferred so it runs after
+  -- the ftplugin whatever order the FileType handlers were defined in (this plugin may be loaded
+  -- from init.lua, before filetype plugins are enabled).
+  vim.api.nvim_create_autocmd('FileType', {
+    group = group,
+    pattern = 'gitcommit',
+    desc = 'shortcut.nvim: gf on sc-<id>',
+    callback = function(ev)
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(ev.buf) and vim.bo[ev.buf].filetype == 'gitcommit' then
+          M.chain_includeexpr(ev.buf)
+        end
+      end)
+    end,
+  })
+end
+
+--- Forget cached `sc-<id>` kinds (for tests).
+function M._clear_cache()
+  kind_cache = {}
+end
+
+return M

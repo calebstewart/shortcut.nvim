@@ -72,7 +72,35 @@ _Coming soon._
 
 | Command | Description |
 |---|---|
+| `:Shortcut story {id \| sc-<id> \| url}` | Open a story |
+| `:Shortcut epic {id \| sc-<id> \| url}` | Open an epic |
 | `:Shortcut help` | List available subcommands |
+
+## Opening stories and epics
+
+Each story or epic is a single buffer named `shortcut://story/<id>` or `shortcut://epic/<id>`.
+Other ways of naming it switch to that buffer:
+
+- `:e https://app.shortcut.com/<workspace>/story/<id>/...` (or `/epic/<id>`): a link copied from
+  the web app. Neovim's built-in download of `https://` files is skipped for these.
+- `:e sc-<id>`: looked up as a story or epic. Turn this off with `sc_ids = false`. Names that
+  merely start with `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
+  `notes/sc-42`), and files that exist on disk open as normal files.
+- `gf` on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through `'includeexpr'`,
+  which the plugin sets globally when it is empty, and chains onto the `gitcommit` ftplugin's
+  own. Other filetypes that set their own (e.g. `lua`, `python`) can opt in from
+  `after/ftplugin/<filetype>.lua`; the original expression still handles every other name:
+
+  ```lua
+  require('shortcut').chain_includeexpr()
+  ```
+
+After the switch, `<C-^>` returns to the buffer you came from.
+
+> [!NOTE]
+> Rendering is not implemented yet: the buffer only shows the object's kind and ID, and `:w`
+> reports that saving is not supported. Until the API client exists, `sc-<id>` always opens a
+> story.
 
 ## Development
 
