@@ -136,4 +136,21 @@ T['canonical() round-trips through parse()'] = function()
   end
 end
 
+T['comment names'] = function()
+  eq(uri.comment_name(42), 'shortcut://story/42/comment')
+  eq(uri.parse_comment_name('shortcut://story/42/comment'), 42)
+  -- Not an object: never routed as a story.
+  eq(uri.parse('shortcut://story/42/comment'), nil)
+  for _, name in ipairs({
+    'shortcut://epic/42/comment',
+    'shortcut://story/42/comments',
+    'shortcut://story/0/comment',
+    'shortcut://story/42',
+    'shortcut://story/x/comment',
+  }) do
+    eq(uri.parse_comment_name(name), nil)
+  end
+  eq(uri.parse_comment_name(nil), nil)
+end
+
 return T

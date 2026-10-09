@@ -54,15 +54,23 @@ T['startup']['defines :Shortcut without loading feature modules'] = function()
   eq(child.lua_get([[package.loaded['shortcut.http'] == nil]]), true)
   eq(child.lua_get([[package.loaded['shortcut.auth'] == nil]]), true)
   eq(child.lua_get([[package.loaded['shortcut.login'] == nil]]), true)
+  eq(child.lua_get([[package.loaded['shortcut.actions'] == nil]]), true)
+  eq(child.lua_get([[package.loaded['shortcut.target'] == nil]]), true)
+  eq(child.lua_get([[package.loaded['shortcut.git'] == nil]]), true)
 end
 
 T['completion'] = new_set()
 
 T['completion']['lists subcommands'] = function()
-  eq(complete('Shortcut '), { 'diff', 'epic', 'help', 'login', 'story' })
+  local builtin =
+    { 'browse', 'comment', 'diff', 'epic', 'help', 'login', 'refresh', 'state', 'story', 'yank' }
+  eq(complete('Shortcut '), builtin)
   add_fake_lazy()
-  eq(complete('Shortcut '), { 'diff', 'epic', 'fake', 'help', 'login', 'story' })
+  local with_fake = vim.list_extend({ 'fake' }, builtin)
+  table.sort(with_fake)
+  eq(complete('Shortcut '), with_fake)
   eq(complete('Shortcut h'), { 'help' })
+  eq(complete('Shortcut s'), { 'state', 'story' })
   eq(complete('Shortcut! f'), { 'fake' })
 end
 
@@ -79,6 +87,10 @@ T['completion']['delegates to the subcommand'] = function()
 
   eq(complete('Shortcut fake one b'), { 'beta' })
   eq(child.lua_get('_G.completed_with'), { arglead = 'b', args = { 'one' } })
+
+  -- A word with an escaped space is one argument.
+  complete('Shortcut fake one two\\ b')
+  eq(child.lua_get('_G.completed_with'), { arglead = 'two\\ b', args = { 'one' } })
 end
 
 T['completion']['returns nothing for unknown subcommands or no completer'] = function()
@@ -106,7 +118,7 @@ T['dispatch']['shows the subcommand list with no arguments'] = function()
   eq(msgs[1].level, vim.log.levels.INFO)
   expect.no_error(function()
     assert(msgs[1].msg:find('usage: :Shortcut', 1, true))
-    assert(msgs[1].msg:find('help   List available subcommands', 1, true))
+    assert(msgs[1].msg:find('help%s+List available subcommands'))
   end)
 end
 
@@ -114,7 +126,7 @@ T['dispatch']['help lists lazy subcommands with descriptions'] = function()
   add_fake_lazy()
   child.cmd('Shortcut help')
   expect.no_error(function()
-    assert(messages()[1].msg:find('fake   A fake subcommand', 1, true))
+    assert(messages()[1].msg:find('fake%s+A fake subcommand'))
   end)
 end
 
