@@ -490,6 +490,19 @@ T['write_cli_config()']['refuses to migrate onto a non-empty config dir'] = func
   eq(vim.uv.fs_stat(default_file()), nil)
 end
 
+T['write_cli_config()']['reports why it cannot migrate onto a symlinked config dir'] = function()
+  write(home .. '/.clubhouse-cli/config.json', { token = 'old' })
+  vim.fn.mkdir(home .. '/empty', 'p')
+  vim.fn.mkdir(home .. '/.config', 'p')
+  assert(vim.uv.fs_symlink(home .. '/empty', home .. '/.config/shortcut-cli'))
+  local r = write_cli_config({ token = TOKEN })
+  eq(r.ok, nil)
+  contains(r.err, 'ENOTDIR')
+  not_contains(r.err, 'not empty')
+  contains(r.err, 'yourself')
+  eq(read_json(home .. '/.clubhouse-cli/config.json'), { token = 'old' })
+end
+
 T['write_cli_config()']['writes {} rather than [] for no fields'] = function()
   eq(write_cli_config({}), { ok = true })
   eq(table.concat(vim.fn.readfile(default_file()), '\n'), '{}')
@@ -512,6 +525,7 @@ T['fast context'] = new_set()
 
 T['fast context']['works from a libuv callback'] = function()
   full_file()
+  write(home .. '/.clubhouse-cli/config.json', { token = 'legacy' })
   local r = child.lua([[
     local out
     local timer = assert(vim.uv.new_timer())
@@ -522,11 +536,15 @@ T['fast context']['works from a libuv callback'] = function()
         local first, first_err = auth.resolve()
         local wrote, write_err = auth.write_cli_config({ token = 'fresh-token' })
         local second, second_err = auth.resolve()
+        -- A missing, nested config dir, with a legacy config to migrate.
+        vim.uv.os_setenv('XDG_CONFIG_HOME', vim.uv.os_getenv('HOME') .. '/a/b')
+        local migrated, migrate_err = auth.write_cli_config({ urlSlug = 'ws' })
         return {
           path = path,
           first = first and first.token or first_err,
           wrote = wrote or write_err,
           second = second and second.token or second_err,
+          migrated = migrated or migrate_err,
         }
       end)
       out = ok and err or { error = tostring(err) }
@@ -534,7 +552,15 @@ T['fast context']['works from a libuv callback'] = function()
     vim.wait(5000, function() return out ~= nil end)
     return out
   ]])
-  eq(r, { path = default_file(), first = TOKEN, wrote = true, second = 'fresh-token' })
+  eq(r, {
+    path = default_file(),
+    first = TOKEN,
+    wrote = true,
+    second = 'fresh-token',
+    migrated = true,
+  })
+  eq(vim.uv.fs_stat(home .. '/.clubhouse-cli'), nil)
+  eq(read_json(home .. '/a/b/shortcut-cli/config.json'), { token = 'legacy', urlSlug = 'ws' })
 end
 
 return T

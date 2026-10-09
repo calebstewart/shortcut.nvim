@@ -320,12 +320,17 @@ local function migrate_legacy(paths)
     if exists(legacy) then
       if exists(dir) then
         -- Like the CLI's rename, this only works onto an empty directory.
-        if not vim.uv.fs_rmdir(dir) then
+        local removed, rm_err, code = vim.uv.fs_rmdir(dir)
+        if not removed then
+          local reason = (code == 'ENOTEMPTY' or code == 'EEXIST')
+              and 'it already exists and is not empty'
+            or rm_err
+            or 'unknown error'
           return false,
             (
-              'cannot move the legacy short config %s to %s, which already exists and is not '
-              .. 'empty. Move %s into %s yourself, then try again.'
-            ):format(legacy, dir, vim.fs.joinpath(legacy, 'config.json'), dir)
+              'cannot move the legacy short config %s to %s: %s. '
+              .. 'Move %s into %s yourself, then try again.'
+            ):format(legacy, dir, reason, vim.fs.joinpath(legacy, 'config.json'), dir)
         end
       else
         local ok, err = mkdir_p(vim.fs.dirname(dir), tonumber('755', 8))
