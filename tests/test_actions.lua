@@ -244,6 +244,104 @@ T['comment'][':w!, :x and :update each post once'] = function()
   end
 end
 
+T['comment'][':wall, :wqa and :xa from another window post nothing'] = function()
+  open_comment('301')
+  child.cmd('stopinsert')
+  local buf = child.api.nvim_get_current_buf()
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'half a' })
+  child.cmd('wincmd p')
+  for _, cmd in ipairs({ 'wall', 'wqa', 'xa' }) do
+    child.lua('_G.messages = {}')
+    pcall(child.cmd, cmd)
+    child.lua('vim.wait(50)')
+    -- Still running: the draft is still modified, so Neovim did not exit.
+    eq({ cmd = cmd, writes = writes() }, { cmd = cmd, writes = {} })
+    eq(child.api.nvim_buf_get_option(buf, 'modified'), true)
+    eq(child.api.nvim_buf_get_lines(buf, 0, -1, false), { 'half a' })
+    eq(messages(), {
+      {
+        msg = 'shortcut.nvim: the comment on sc-301 was not posted: only :w in its window posts it',
+        level = 3,
+      },
+    })
+  end
+  -- In the float itself, `:wall` is `:w`.
+  child.lua('_G.messages = {}')
+  child.cmd('Shortcut comment 301')
+  eq(child.api.nvim_get_current_buf(), buf)
+  child.cmd('wall')
+  wait_messages(1)
+  eq(writes(), { { method = 'POST', path = '/stories/301/comments', body = { text = 'half a' } } })
+  eq(child.api.nvim_buf_is_valid(buf), false)
+end
+
+T['comment'][':wqa in the float that fails does not exit and keeps the text'] = function()
+  child.lua([[_G.overrides['POST /stories/301/comments'] = { status = 500 }]])
+  open_comment('301')
+  child.cmd('stopinsert')
+  local buf = child.api.nvim_get_current_buf()
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'keep me' })
+  pcall(child.cmd, 'wqa')
+  -- Waited for the answer within the command.
+  eq(#writes(), 1)
+  eq(child.api.nvim_get_current_buf(), buf)
+  eq(child.api.nvim_buf_get_lines(0, 0, -1, false), { 'keep me' })
+  eq(child.bo.modified, true)
+  eq(child.bo.modifiable, true)
+  expect.no_error(function()
+    assert(messages()[1].msg:find('failed to post the comment on sc-301', 1, true))
+  end)
+end
+
+T['comment'][':wqa in the float that takes too long does not exit'] = function()
+  child.lua([[
+    require('shortcut.buffer.comment').QUIT_WAIT = 50
+    _G.overrides['POST /stories/301/comments'] = { status = 201, fixture = 'comment', hold = true }
+  ]])
+  open_comment('301')
+  child.cmd('stopinsert')
+  local buf = child.api.nvim_get_current_buf()
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'slow' })
+  pcall(child.cmd, 'wqa')
+  eq(#writes(), 1)
+  eq(child.api.nvim_get_current_buf(), buf)
+  eq(child.bo.modified, true)
+  eq(messages(), {
+    { msg = 'shortcut.nvim: the comment on sc-301 is still being posted: not exiting', level = 3 },
+  })
+  -- Once posted, the float closes; nothing is sent again.
+  child.lua('_G.held[1]()')
+  wait_messages(2)
+  eq(messages()[2], { msg = 'shortcut.nvim: comment posted on sc-301', level = 2 })
+  eq(child.api.nvim_buf_is_valid(buf), false)
+  eq(#writes(), 1)
+end
+
+T['comment'][':wqa in the float posts before Neovim exits'] = function()
+  local out = vim.fn.tempname()
+  open_comment('301')
+  child.cmd('stopinsert')
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'bye' })
+  child.lua(
+    [[
+    local out = ...
+    vim.api.nvim_create_autocmd('VimLeavePre', { callback = function()
+      vim.fn.writefile({ vim.json.encode({ writes = _G.writes(), messages = _G.messages }) }, out)
+    end })
+  ]],
+    { out }
+  )
+  pcall(child.cmd, 'wqa')
+  vim.wait(2000, function()
+    return vim.fn.filereadable(out) == 1
+  end, 10)
+  local res = vim.json.decode(vim.fn.readfile(out)[1])
+  vim.fn.delete(out)
+  eq(res.writes, { { method = 'POST', path = '/stories/301/comments', body = { text = 'bye' } } })
+  -- The answer arrived before exiting; the closing itself was left for later.
+  eq(res.messages, {})
+end
+
 T['comment']['exiting waits for the post, and saves the draft if it fails'] = function()
   -- Success: nothing saved.
   open_comment('301')

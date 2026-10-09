@@ -163,10 +163,13 @@ bare ID is looked up to find out which it is).
 
   Only writing the float to its own name posts (`:w`, `:w!`, `:wq`, `:x`, `:update`). Writing
   it anywhere else (`:w file`, `:saveas file`, `:1,2w file`, `:w >> file`) is refused: nothing
-  is posted and no file is written. Like any modified buffer, the draft is also written, and so
-  **posted**, by `:wall`, `:wqa` and `:xa`, even from another window. When Neovim exits with a
-  comment still being posted, it waits for the answer (up to 15 seconds); a comment that could
-  not be posted is saved under `stdpath('state')/shortcut/unsent/` and the path is printed.
+  is posted and no file is written. `:wall`, `:wqa` and `:xa` run from another window don't post
+  the draft either: it stays modified, so `:wqa` and `:xa` don't exit. Run in the float itself,
+  they post it (like `:w`), and `:wqa`/`:xa` wait for the answer (up to 10 seconds): if posting
+  fails or takes longer, Neovim doesn't exit and the text stays. If Neovim exits anyway with a
+  comment still being posted (`:w` then `:qa`), it waits for the answer (up to 15 seconds); a
+  comment that could not be posted is saved under `stdpath('state')/shortcut/unsent/` and the
+  path is printed.
 - **`:Shortcut state`** lists the states of the story's workflow in order, the current one
   marked, with `vim.ui.select`. Give a state name to move the story directly; names are
   completed with `<Tab>` (the current story buffer's workflow, or every workflow's) and matched

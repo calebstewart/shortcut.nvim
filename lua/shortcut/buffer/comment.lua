@@ -7,10 +7,14 @@
 --- in the buffer (and the float is reopened with it if it was closed meanwhile, e.g. by `:wq`).
 ---
 --- Only a write to the buffer's own name posts; `:w file`, `:saveas`, partial writes etc. are
---- refused. `:wall`/`:wqa`/`:xa` do post the draft: inside a `BufWriteCmd` they can't be told
---- apart from `:w` in the float (Neovim makes the buffer current for the autocommand). So that
---- `:wqa` never silently loses a comment, exiting waits for posts in flight and saves the drafts
---- that fail (see `on_exit()`).
+--- refused. So is a write from another window (`:wall`, `:wqa`, `:xa` there): the draft is
+--- kept, still modified, so `:wqa`/`:xa` don't exit. Neovim makes the buffer current for the
+--- autocommand, so focus is tracked with `BufEnter`/`BufLeave`, which it doesn't trigger then.
+---
+--- `:wqa`/`:xa` in the float itself post and wait for the answer (at most `QUIT_WAIT`): if it
+--- fails, the buffer stays modified, so Neovim doesn't exit and the error is shown. As a last
+--- resort, exiting with a post still in flight (e.g. `:w` then `:qa`) waits for it and saves the
+--- draft if it fails (see `on_exit()`).
 local notify = require('shortcut.notify')
 local uri = require('shortcut.uri')
 
@@ -21,6 +25,12 @@ local MAX_TITLE = 70
 
 ---@type table<integer, true> Buffers whose comment is being posted.
 local posting = {}
+
+---@type table<integer, true> Comment buffers that are the user's current buffer.
+local focused = {}
+
+--- Set by `QuitPre` until the command has run: a write now is part of `:wqa`/`:xa`.
+local quitting = false
 
 ---@param id integer
 ---@param title? string The story's title.
@@ -198,23 +208,38 @@ end
 
 local exit_group ---@type integer?
 
---- Post the comment in `buf`.
+--- Longest wait for the answer when posting as part of `:wqa`/`:xa`, in milliseconds.
+M.QUIT_WAIT = 10000
+
+---@type table<integer, fun()|true> Buffers whose `BufWriteCmd` is waiting for the answer: what
+--- to do once it has returned (Neovim is still writing the buffer meanwhile, so the float must
+--- not be closed).
+local waiting = {}
+
+--- Post the comment in `buf`. Returns whether a request was sent, and a function telling whether
+--- it is done.
 ---@param buf integer
+---@return boolean sent
+---@return fun(): boolean done
 function M.post(buf)
+  local done = false
+  local function is_done()
+    return done
+  end
   local info = vim.b[buf].shortcut_comment
   if type(info) ~= 'table' then
-    return
+    return false, is_done
   end
   local id = info.id --[[@as integer]]
   if posting[buf] then
     notify.warn(('the comment on sc-%d is already being posted'):format(id))
-    return
+    return false, is_done
   end
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local text = M.text(lines)
   if text == '' then
     notify.error(('the comment is empty: nothing was posted to sc-%d'):format(id))
-    return
+    return false, is_done
   end
 
   if not exit_group then
@@ -238,6 +263,7 @@ function M.post(buf)
   local http = require('shortcut.http')
   require('shortcut.api.stories').comments.create(id, { text = text }, function(err)
     posting[buf] = nil
+    done = true
     flight.done, flight.ok = true, not err
     if not exiting then
       inflight[flight] = nil
@@ -263,26 +289,34 @@ function M.post(buf)
     if exiting then
       return
     end
-    if valid then
-      for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-        pcall(vim.api.nvim_win_close, win, true)
-      end
+    local function finish()
       if vim.api.nvim_buf_is_valid(buf) then
-        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+          pcall(vim.api.nvim_win_close, win, true)
+        end
+        if vim.api.nvim_buf_is_valid(buf) then
+          pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        end
+      end
+      local handlers = require('shortcut.buffer.handlers')
+      local reload = handlers.reload_if_unmodified('story', id)
+      if reload == 'modified' then
+        notify.warn(
+          ('comment posted on sc-%d; its buffer has unsaved changes, so it was not reloaded'):format(
+            id
+          )
+        )
+      else
+        notify.info(('comment posted on sc-%d'):format(id))
       end
     end
-    local handlers = require('shortcut.buffer.handlers')
-    local reload = handlers.reload_if_unmodified('story', id)
-    if reload == 'modified' then
-      notify.warn(
-        ('comment posted on sc-%d; its buffer has unsaved changes, so it was not reloaded'):format(
-          id
-        )
-      )
+    if waiting[buf] then
+      waiting[buf] = finish
     else
-      notify.info(('comment posted on sc-%d'):format(id))
+      finish()
     end
   end)
+  return true, is_done
 end
 
 --- The `BufWriteCmd` of a comment buffer: only a write of the buffer to its own name (`:w`,
@@ -309,7 +343,57 @@ function M.on_write(ev)
     )
     return
   end
-  M.post(buf)
+  if not focused[buf] or vim.api.nvim_get_current_buf() ~= buf then
+    -- `:wall`/`:wqa`/`:xa` from another window: the draft may be half-written. Left modified,
+    -- so `:wqa`/`:xa` don't exit.
+    notify.warn(
+      ('the comment on sc-%d was not posted: only :w in its window posts it'):format(info.id)
+    )
+    return
+  end
+  if not quitting then
+    M.post(buf)
+    return
+  end
+  -- `:wqa`/`:xa`: wait for the answer, so that a failure keeps the buffer modified and stops
+  -- Neovim from exiting, rather than being lost.
+  waiting[buf] = true
+  local sent, is_done = M.post(buf)
+  local answered = not sent or vim.wait(M.QUIT_WAIT, is_done, 10)
+  local finish = waiting[buf]
+  waiting[buf] = nil
+  if type(finish) == 'function' then
+    -- Posted: close the float after the command (if Neovim doesn't exit first).
+    vim.schedule(finish)
+  end
+  if not answered then
+    -- Still in flight: don't exit. The float closes once it is posted.
+    vim.bo[buf].modified = true
+    notify.warn(
+      ('the comment on sc-%d is still being posted: not exiting'):format(info.id --[[@as integer]])
+    )
+  end
+end
+
+local quit_group ---@type integer?
+
+--- Track `QuitPre`, which `:wqa`/`:xa` trigger before writing.
+local function watch_quit()
+  if quit_group then
+    return
+  end
+  quit_group = vim.api.nvim_create_augroup('shortcut.buffer.comment.quit', { clear = true })
+  vim.api.nvim_create_autocmd('QuitPre', {
+    group = quit_group,
+    desc = 'shortcut.nvim: wait for a comment posted by :wqa',
+    callback = function()
+      quitting = true
+      -- Once the command has run (and not exited).
+      vim.schedule(function()
+        quitting = false
+      end)
+    end,
+  })
 end
 
 ---@class shortcut.comment.OpenOpts
@@ -385,13 +469,28 @@ function M.open(id, opts)
       )
     end,
   })
+  -- Not triggered when Neovim makes the buffer current for `:wall` from another window.
+  vim.api.nvim_create_autocmd('BufEnter', {
+    buffer = buf,
+    callback = function(ev)
+      focused[ev.buf] = true
+    end,
+  })
+  vim.api.nvim_create_autocmd('BufLeave', {
+    buffer = buf,
+    callback = function(ev)
+      focused[ev.buf] = nil
+    end,
+  })
   vim.api.nvim_create_autocmd('BufWipeout', {
     buffer = buf,
     once = true,
     callback = function(ev)
       posting[ev.buf] = nil
+      focused[ev.buf] = nil
     end,
   })
+  watch_quit()
 
   open_win(buf, M.title(id, opts.title))
   if not opts.lines then
