@@ -6,7 +6,8 @@
 --- every window showing it to the canonical buffer and then deletes it.
 ---
 --- How objects are loaded and saved is pluggable: renderers call `register()` for their kind.
---- Until then a placeholder is used.
+--- Stories are handled by `shortcut.buffer.story`, loaded on first use; epics use a placeholder
+--- until their renderer exists.
 local notify = require('shortcut.notify')
 local uri = require('shortcut.uri')
 
@@ -65,8 +66,29 @@ local function placeholder(kind)
   }
 end
 
+--- A handler that requires `module` (exporting `handler`) only when first used, so nothing
+--- heavy is loaded at startup.
+---@param module string
+---@return shortcut.buffer.Handler
+local function lazy(module)
+  local function get()
+    return require(module).handler --[[@as shortcut.buffer.Handler]]
+  end
+  return {
+    load = function(...)
+      return get().load(...)
+    end,
+    save = function(...)
+      return assert(get().save)(...)
+    end,
+    jump = function(...)
+      return assert(get().jump)(...)
+    end,
+  }
+end
+
 ---@type table<shortcut.Kind, shortcut.buffer.Handler>
-local registry = { story = placeholder('story'), epic = placeholder('epic') }
+local registry = { story = lazy('shortcut.buffer.story'), epic = placeholder('epic') }
 
 --- The default resolver: `GET /stories/<id>`, and on 404 `GET /epics/<id>`.
 ---

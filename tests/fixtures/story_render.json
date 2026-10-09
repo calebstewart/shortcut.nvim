@@ -1,0 +1,137 @@
+{
+  "app_url": "https://app.shortcut.com/example-workspace/story/301",
+  "archived": false,
+  "comments": [
+    {
+      "app_url": "https://app.shortcut.com/example-workspace/story/301/render-me#activity-325",
+      "author_id": "00000000-0000-4000-8000-000000000101",
+      "created_at": "2026-02-03T09:30:00.250Z",
+      "deleted": false,
+      "entity_type": "story-comment",
+      "id": 325,
+      "parent_id": null,
+      "position": 5,
+      "story_id": 301,
+      "text": "Last top-level comment.\r\nSecond line.\r\n",
+      "updated_at": "2026-02-03T09:30:00Z"
+    },
+    {
+      "app_url": "https://app.shortcut.com/example-workspace/story/301/render-me#activity-321",
+      "author_id": "00000000-0000-4000-8000-000000000101",
+      "created_at": "2026-02-01T10:00:00Z",
+      "deleted": false,
+      "entity_type": "story-comment",
+      "id": 321,
+      "parent_id": null,
+      "position": 1,
+      "story_id": 301,
+      "text": "First comment.\n\nWith a paragraph.",
+      "updated_at": "2026-02-01T10:00:00Z"
+    },
+    {
+      "app_url": "https://app.shortcut.com/example-workspace/story/301/render-me#activity-322",
+      "author_id": "00000000-0000-4000-8000-000000000102",
+      "created_at": "2026-02-01T12:15:00+02:00",
+      "deleted": false,
+      "entity_type": "story-comment",
+      "id": 322,
+      "parent_id": 321,
+      "position": 2,
+      "story_id": 301,
+      "text": "A reply.",
+      "updated_at": "2026-02-01T10:15:00Z"
+    },
+    {
+      "app_url": "https://app.shortcut.com/example-workspace/story/301/render-me#activity-323",
+      "author_id": "00000000-0000-4000-8000-000000000101",
+      "created_at": "2026-02-02T08:00:00Z",
+      "deleted": true,
+      "entity_type": "story-comment",
+      "id": 323,
+      "parent_id": null,
+      "position": 3,
+      "story_id": 301,
+      "text": null,
+      "updated_at": "2026-02-02T08:00:00Z"
+    },
+    {
+      "app_url": "https://app.shortcut.com/example-workspace/story/301/render-me#activity-324",
+      "author_id": "00000000-0000-4000-8000-000000000999",
+      "created_at": "2026-02-01T11:00:00Z",
+      "deleted": false,
+      "entity_type": "story-comment",
+      "id": 324,
+      "parent_id": 321,
+      "position": 4,
+      "story_id": 301,
+      "text": "A later reply, by someone no longer in the workspace.",
+      "updated_at": "2026-02-01T11:00:00Z"
+    }
+  ],
+  "created_at": "2026-02-01T09:00:00Z",
+  "description": "Intro paragraph.\r\n\r\n## Tasks\r\n\r\n- [ ] not a real task, just text\r\n\r\n",
+  "entity_type": "story",
+  "epic_id": 201,
+  "estimate": 5,
+  "id": 301,
+  "iteration_id": 702,
+  "label_ids": [602, 601],
+  "labels": [
+    {
+      "archived": false,
+      "color": "#00ff00",
+      "entity_type": "label",
+      "id": 601,
+      "name": "bug"
+    },
+    {
+      "archived": false,
+      "color": "#0000ff",
+      "entity_type": "label",
+      "id": 602,
+      "name": "Frontend"
+    }
+  ],
+  "name": "Render me",
+  "owner_ids": [
+    "00000000-0000-4000-8000-000000000102",
+    "00000000-0000-4000-8000-000000000101"
+  ],
+  "position": 2000,
+  "story_type": "bug",
+  "tasks": [
+    {
+      "complete": false,
+      "description": "Shared task",
+      "entity_type": "story-task",
+      "id": 313,
+      "owner_ids": [
+        "00000000-0000-4000-8000-000000000101",
+        "00000000-0000-4000-8000-000000000102"
+      ],
+      "position": 3,
+      "story_id": 301
+    },
+    {
+      "complete": true,
+      "description": "Done task",
+      "entity_type": "story-task",
+      "id": 311,
+      "owner_ids": ["00000000-0000-4000-8000-000000000101"],
+      "position": 1,
+      "story_id": 301
+    },
+    {
+      "complete": false,
+      "description": "Open task",
+      "entity_type": "story-task",
+      "id": 312,
+      "owner_ids": [],
+      "position": 2,
+      "story_id": 301
+    }
+  ],
+  "updated_at": "2026-02-03T09:30:00Z",
+  "workflow_id": 500,
+  "workflow_state_id": 502
+}

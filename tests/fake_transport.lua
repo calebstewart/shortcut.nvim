@@ -6,6 +6,7 @@
 --   _G.responses  queue of transport results to serve; `{ status = n, fixture = 'name' }` serves
 --                 tests/fixtures/<name>.json as the body. An empty queue answers 500.
 --   _G.routes     optional `fun(req): result?`, consulted before the queue
+--   _G.held       answers of results with `hold = true`: call one to deliver it
 --   _G.cancelled  number of transport cancellations
 --   _G.fixture(name) -> string
 --   _G.sync_request(req) -> { err, data, resp, fast }   waits for the callback
@@ -15,6 +16,7 @@ _G.requests = {}
 _G.responses = {}
 _G.routes = nil
 _G.cancelled = 0
+_G.held = {}
 
 -- Relative to this file, so tests may change the working directory.
 local fixtures = vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), 'fixtures')
@@ -34,17 +36,25 @@ http._set_transport(function(req, done)
     res.body = _G.fixture(res.fixture)
     res.fixture = nil
   end
+  local cancel = {
+    cancel = function()
+      _G.cancelled = _G.cancelled + 1
+    end,
+  }
+  if res.hold then
+    res.hold = nil
+    table.insert(_G.held, function()
+      done(res)
+    end)
+    return cancel
+  end
   -- Like curl, answer later, from a fast event.
   local timer = assert(vim.uv.new_timer())
   timer:start(1, 0, function()
     timer:close()
     done(res)
   end)
-  return {
-    cancel = function()
-      _G.cancelled = _G.cancelled + 1
-    end,
-  }
+  return cancel
 end)
 -- No waiting between retries.
 ---@diagnostic disable-next-line: duplicate-set-field
