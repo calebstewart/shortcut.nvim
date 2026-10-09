@@ -532,4 +532,28 @@ T['user()']['asks the API for an environment token'] = function()
   eq(child.lua_get('_G.out'), { u = { mention_name = 'jdoe', url_slug = 'acme' } })
 end
 
+T['slug source'] = new_set()
+
+T['slug source']['warns when a URL is for another workspace than the token'] = function()
+  child.lua([[_G.routes = function() return { status = 200, fixture = 'member' } end]])
+  child.cmd('edit https://app.shortcut.com/elsewhere/story/12')
+  child.lua([[vim.wait(1000, function() return #_G.messages > 0 end)]])
+  local msgs = child.lua_get('_G.messages')
+  eq(#msgs, 1)
+  eq(msgs[1].msg:find("workspace 'elsewhere' but your token is for 'acme'", 1, true) ~= nil, true)
+
+  child.lua('_G.messages = {}')
+  child.cmd('edit https://app.shortcut.com/acme/story/13')
+  child.lua('vim.wait(100)')
+  eq(child.lua_get('_G.messages'), {})
+end
+
+T['slug source']['stays quiet without a token'] = function()
+  child.lua('vim.env.SHORTCUT_API_TOKEN = nil')
+  child.cmd('edit https://app.shortcut.com/elsewhere/story/12')
+  child.lua('vim.wait(100)')
+  eq(child.lua_get('_G.messages'), {})
+  eq(#requests(), 0)
+end
+
 return T
