@@ -750,6 +750,17 @@ T['buffer']['<CR> replay keeps the register typed before it'] = function()
   eq(paste('"a<CR>'), '#A Render Epic')
   eq(paste('"a2<CR>'), '#AA Render Epic')
   eq(paste('2"a<CR>'), '#AA Render Epic')
+  -- The expression register: its result is pasted, without a second prompt.
+  eq(paste({ '"=', '"X"', '<CR>', '<CR>' }), '#X Render Epic')
+  eq(paste({ '"=', '"Y"', '<CR>', '2<CR>' }), '#YY Render Epic')
+  eq(child.fn.mode(), 'n')
+  -- Nor are the mapping's keys typed into an expression prompt.
+  child.cmd('nmap <CR> :let g:z = 1<CR>')
+  child.type_keys('"=', '"Z"', '<CR>', '<CR>')
+  eq(child.fn.mode(), 'n')
+  eq(child.g.z, 1)
+  eq(lines()[12], '# Render Epic')
+  child.cmd('nnoremap <CR> p')
 
   -- With 'clipboard', the default register is the clipboard one: it is not passed on, so the
   -- paste still comes from the clipboard, and an explicit register still wins.

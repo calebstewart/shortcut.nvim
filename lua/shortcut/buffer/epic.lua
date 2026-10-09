@@ -577,9 +577,14 @@ local function replay(m)
 
   -- Pieces in order: { keys, mode }.
   local pieces = {} ---@type { [1]: string, [2]: string }[]
-  if vim.v.register ~= default_register() then
+  local reg = vim.v.register
+  if reg == '=' then
+    -- The expression register: its expression was already typed (`"=expr<CR><CR>`). `"=`
+    -- alone would open the prompt again; an empty expression reuses the last one.
+    table.insert(pieces, { '"=' .. CR, 'n' })
+  elseif reg ~= default_register() then
     -- A register was typed before `<CR>` (`"a<CR>`): it applies to the keys too.
-    table.insert(pieces, { '"' .. vim.v.register, 'n' })
+    table.insert(pieces, { '"' .. reg, 'n' })
   end
   if vim.v.count > 0 then
     -- The count was typed before `<CR>`: as with any mapping, it applies to the keys.
