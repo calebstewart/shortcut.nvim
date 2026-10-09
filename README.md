@@ -212,9 +212,18 @@ AND, and `!` or `-` in front of one negates it (`!is:done`). Results arrive a pa
 
 Each row shows `sc-<id>`, the workflow state (coloured by its type: backlog, unstarted, started,
 done; states of other types are not coloured), the story type (`feat`, `bug`, `chore`), the
-title, and the owners (dimmed). Epic rows show the ID, state and name. The preview shows the
-story or epic as its buffer would (fetched when the cursor rests on it, then cached for the
-session); modelines are off in it.
+title, and the owners (dimmed). Epic rows show the ID, state and name.
+
+The preview shows the story or epic as its buffer would, with modelines off. It is fetched once
+the cursor has rested on a row for 300 ms, so moving through the list doesn't fetch every row,
+and at most 40 previews are fetched per minute (past that the preview says it is waiting), well
+within the API's limit of 200 requests per minute. Previews are cached for 5 minutes; any change
+made from Neovim (saving a buffer, `:Shortcut state`, a comment…), `:Shortcut refresh`, or
+loading the object's buffer drops them sooner.
+
+The web link used by the copy and browse keys is the result's own link only if it is a Shortcut
+web app link to that same story or epic; otherwise it is built from your workspace, as
+`:Shortcut yank` does.
 
 | Key | Action |
 |---|---|
@@ -473,7 +482,7 @@ build, only sees files tracked by git.)
 Without Nix:
 
 ```sh
-make test            # clones mini.nvim and (pinned) snacks.nvim into deps/ on first run
+make test            # fetches mini.nvim and snacks.nvim (pinned; picker tests skip offline) into deps/
 make test-file FILE=tests/test_config.lua
 make fmt             # requires stylua
 ```
