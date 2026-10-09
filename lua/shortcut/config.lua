@@ -119,6 +119,13 @@ function M.setup(opts)
   end
 
   current = vim.tbl_deep_extend('force', vim.deepcopy(defaults), opts)
+
+  -- The sc-<id> handler is registered at startup with the defaults; apply `sc_ids` now. (Not
+  -- loaded yet only if the plugin file hasn't run, in which case it reads this config.)
+  local handlers = package.loaded['shortcut.buffer.handlers']
+  if handlers then
+    handlers.sync_sc_ids(current.sc_ids)
+  end
   return true
 end
 

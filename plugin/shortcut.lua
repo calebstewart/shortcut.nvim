@@ -9,6 +9,10 @@ if vim.fn.has('nvim-0.12') == 0 then
   return
 end
 
+-- Buffer routing for shortcut://, Shortcut web URLs and sc-<id>. Has to be in place before any
+-- such name is edited, including files given on the command line.
+require('shortcut.buffer.handlers').setup()
+
 vim.api.nvim_create_user_command('Shortcut', function(cmd)
   require('shortcut.commands').dispatch(cmd)
 end, {

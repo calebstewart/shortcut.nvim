@@ -21,7 +21,10 @@ local M = {}
 
 --- Subcommands provided by feature modules that are loaded on first use.
 ---@type table<string, shortcut.LazySubcommand>
-M.lazy = {}
+M.lazy = {
+  story = { module = 'shortcut.buffer.commands', desc = 'Open a story by ID, sc-<id> or URL' },
+  epic = { module = 'shortcut.buffer.commands', desc = 'Open an epic by ID, sc-<id> or URL' },
+}
 
 ---@type table<string, shortcut.Subcommand>
 local registry = {}
