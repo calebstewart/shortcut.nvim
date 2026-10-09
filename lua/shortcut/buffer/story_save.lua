@@ -242,6 +242,7 @@ end
 ---@field fields string[] Names of the buffer fields it changed.
 ---@field tasks { update: shortcut.story_diff.TaskUpdate[], create: shortcut.story_diff.TaskCreate[], delete: shortcut.story_diff.TaskDelete[] } The task calls that succeeded.
 ---@field created table<integer, integer> Line -> ID of each task created from it.
+---@field created_tasks table<integer, table> Task ID -> the task as the create call returned it.
 
 --- Story fields an `UpdateStory` key sets, when not just the key itself.
 local STORY_FIELDS = { labels = { 'labels', 'label_ids' } }
@@ -289,9 +290,9 @@ function M.baseline(snap, sent, fresh, epic, cur, marks, invalid)
       fresh_tasks[t.id] = t
     end
   end
-  local updated, deleted, created = {}, {}, {} ---@type table<any, true>, table<any, true>, table<any, true>
+  local updated, deleted, created = {}, {}, {} ---@type table<any, table>, table<any, true>, table<any, true>
   for _, u in ipairs(sent.tasks.update) do
-    updated[u.id] = true
+    updated[u.id] = u.fields
   end
   for _, d in ipairs(sent.tasks.delete) do
     deleted[d.id] = true
@@ -303,7 +304,13 @@ function M.baseline(snap, sent, fresh, epic, cur, marks, invalid)
       -- Deleted by this save.
     elseif tid ~= nil and updated[tid] then
       if fresh_tasks[tid] then
-        table.insert(tasks, vim.deepcopy(fresh_tasks[tid]))
+        -- Only the fields sent: anything else someone changed is theirs, not the baseline's
+        -- (or `:w!` would send the old value back).
+        local task = vim.deepcopy(t)
+        for k in pairs(updated[tid]) do
+          task[k] = vim.deepcopy(fresh_tasks[tid][k])
+        end
+        table.insert(tasks, task)
       else
         -- Updated, then deleted by someone else.
         others = true
@@ -318,9 +325,9 @@ function M.baseline(snap, sent, fresh, epic, cur, marks, invalid)
   for _, line in ipairs(lines) do
     local tid = sent.created[line]
     created[tid] = true
-    if fresh_tasks[tid] then
-      table.insert(tasks, vim.deepcopy(fresh_tasks[tid]))
-    else
+    -- As created, not as it is now (for the same reason).
+    table.insert(tasks, vim.deepcopy(sent.created_tasks[tid] or fresh_tasks[tid]))
+    if not fresh_tasks[tid] then
       others = true
     end
   end
@@ -369,7 +376,7 @@ function M.baseline(snap, sent, fresh, epic, cur, marks, invalid)
       end
       for _, kind in ipairs({ 'update', 'delete' }) do
         for _, t in ipairs(retry.tasks[kind]) do
-          others = others or updated[t.id] == true or created[t.id] == true
+          others = others or updated[t.id] ~= nil or created[t.id] == true
         end
       end
     end
@@ -500,6 +507,7 @@ local function run(st)
     fields = changes.fields,
     tasks = { update = {}, create = {}, delete = {} },
     created = {},
+    created_tasks = {},
   }
   for _, u in ipairs(changes.tasks.update) do
     local err = async.await(stories.tasks.update, id, u.id, u.fields)
@@ -523,6 +531,7 @@ local function run(st)
       table.insert(sent.tasks.create, c)
       if type(task) == 'table' and type(task.id) == 'number' then
         sent.created[c.line] = task.id
+        sent.created_tasks[task.id] = task
       end
     end
   end

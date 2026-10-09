@@ -740,6 +740,39 @@ T['failures']['a change on the server to a field just saved is a conflict too'] 
   })
 end
 
+T['failures']["after a partial failure, :w! never sends back a task field it didn't edit"] = function()
+  child.lua([[
+    local routes = _G.routes
+    _G.routes = function(req)
+      local res = routes(req)
+      if req.method == 'PUT' and req.url:match('/tasks/312$') then
+        -- A teammate edits the task's description right after the toggle.
+        _G.server.tasks[3].description = 'Theirs'
+        _G.server.updated_at = '2026-09-09T00:00:00Z'
+      end
+      return res
+    end
+    _G.fail['POST /stories/301/tasks'] = { status = 500, body = '{}' }
+  ]])
+  set_line(23, '- [x] Open task')
+  child.api.nvim_buf_set_lines(0, 24, 24, false, { '- [ ] New one' })
+  write()
+  eq(#writes(), 2)
+  eq(last_message().msg:find('also changed on Shortcut by someone else', 1, true) ~= nil, true)
+  child.lua([[_G.fail = {}; _G.writes = {}]])
+  write()
+  eq(writes(), {})
+  write(true)
+  eq(writes(), {
+    {
+      method = 'POST',
+      path = '/stories/301/tasks',
+      body = { description = 'New one', complete = false },
+    },
+  })
+  eq(child.lua_get('_G.server.tasks[3].description'), 'Theirs')
+end
+
 --- Make the next `GET /stories/301` after a write fail, once.
 local function fail_reload()
   child.lua([[
