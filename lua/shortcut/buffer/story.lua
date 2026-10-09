@@ -295,16 +295,100 @@ local function by_position(a, b)
   return (tonumber(a.id) or 0) < (tonumber(b.id) or 0)
 end
 
---- A task line, without its extmark.
+--- The middle dot of `SEPARATOR`.
+local DOT = '·'
+
+--- Where the owners start in a task's text: the byte index of the last ` · ` followed only by
+--- `@mention`s, and those mentions (without `@`). `nil` if there are none.
+---@param text string
+---@return integer? index
+---@return string[]? owners
+local function owner_suffix(text)
+  local sep = M.SEPARATOR
+  local last ---@type integer?
+  local from = 1
+  while true do
+    local i = text:find(sep, from, true)
+    if not i then
+      break
+    end
+    last = i
+    from = i + 1
+  end
+  if not last then
+    return nil
+  end
+  local suffix = vim.trim(text:sub(last + #sep))
+  if suffix == '' then
+    return nil
+  end
+  local owners = {}
+  for word in suffix:gmatch('%S+') do
+    local mention = word:match('^@(.+)$')
+    if not mention then
+      return nil
+    end
+    table.insert(owners, mention)
+  end
+  return last, owners
+end
+
+--- Split the text of a task line (shown with owners) into its description and owners: the
+--- last ` · ` followed only by `@mention`s separates them. The description is still escaped
+--- (see `escape_task()`).
+---@param text string
+---@return string description
+---@return string[] owners
+function M.split_owners(text)
+  local last, owners = owner_suffix(text)
+  if last and owners then
+    return vim.trim(text:sub(1, last - 1)), owners
+  end
+  return vim.trim(text), {}
+end
+
+--- A task description as written on its line when owners are shown, so that it can never be
+--- read as having owners (`unescape_task()` is the inverse). A description that itself ends in
+--- ` · @word` gets a backslash before that dot (` \· @word`), and backslashes right before a dot
+--- are doubled. Anything else is unchanged.
+---@param description string One line.
+---@return string
+function M.escape_task(description)
+  local s = description:gsub('(\\+)' .. DOT, function(bs)
+    return bs .. bs .. DOT
+  end)
+  local last = owner_suffix(s)
+  if last then
+    -- The dot is right after the separator's leading space. One escape is enough: every
+    -- earlier ` · ` is now followed by the `\·` word, which is not a mention.
+    s = s:sub(1, last) .. '\\' .. s:sub(last + 1)
+  end
+  return s
+end
+
+--- The inverse of `escape_task()`: `n` backslashes before a dot become `floor(n / 2)`.
+---@param text string
+---@return string
+function M.unescape_task(text)
+  return (
+    text:gsub('(\\+)' .. DOT, function(bs)
+      return bs:sub(1, math.floor(#bs / 2)) .. DOT
+    end)
+  )
+end
+
+--- A task line, without its extmark. With owners shown, the description is escaped (see
+--- `escape_task()`), so the owners suffix only ever holds real owners.
 ---@param task table
 ---@param refs shortcut.story.Refs
 ---@param show_owners boolean
 ---@return string
 function M.task_line(task, refs, show_owners)
-  local line = ('- [%s] %s'):format(
-    task.complete == true and 'x' or ' ',
-    one_line(task.description)
-  )
+  local description = one_line(task.description)
+  if show_owners then
+    description = M.escape_task(description)
+  end
+  local line = ('- [%s] %s'):format(task.complete == true and 'x' or ' ', description)
   local owners = list_of(task.owner_ids)
   if show_owners and #owners > 0 then
     local mentions = {}

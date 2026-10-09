@@ -379,6 +379,36 @@ T['tasks']['toggle, edit and owners'] = function()
   eq(child.bo.modified, false)
 end
 
+T['tasks']['a description ending in · @word is never read as owners'] = function()
+  child.lua([[_G.server.tasks[3].description = 'Email team · @jdoe']])
+  child.cmd('edit!')
+  child.lua('vim.wait(20); _G.wait_loaded()')
+  eq(lines()[23], '- [ ] Email team \\· @jdoe')
+  -- Edit "team" in place.
+  child.api.nvim_buf_set_text(0, 22, 12, 22, 16, { 'crew' })
+  write()
+  eq(writes(), {
+    {
+      method = 'PUT',
+      path = '/stories/301/tasks/312',
+      body = { description = 'Email crew · @jdoe' },
+    },
+  })
+  eq(lines()[23], '- [ ] Email crew \\· @jdoe')
+  -- Appending a mention adds it to the description: jdoe never becomes an owner.
+  child.lua('_G.writes = {}')
+  set_line(23, lines()[23] .. ' @Alex.Smith')
+  write()
+  eq(writes(), {
+    {
+      method = 'PUT',
+      path = '/stories/301/tasks/312',
+      body = { description = 'Email crew · @jdoe @Alex.Smith' },
+    },
+  })
+  eq(child.lua_get('_G.server.tasks[3].owner_ids'), {})
+end
+
 T['tasks']['an unknown owner is a diagnostic on its line'] = function()
   set_line(23, '- [ ] Open task · @nobody')
   write()

@@ -427,6 +427,67 @@ T['split_owners()'] = function()
   eq({ s('a·@x') }, { 'a·@x', {} })
 end
 
+T['task descriptions that look like owners are escaped'] = function()
+  local line = function(description, owner_ids)
+    return story.task_line({ description = description, owner_ids = owner_ids or {} }, REFS, true)
+  end
+  -- Ends in ` · @word` but has no owners: the dot is escaped.
+  eq(line('Email team · @jdoe'), '- [ ] Email team \\· @jdoe')
+  eq(line('a · @x · @y'), '- [ ] a · @x \\· @y')
+  eq(line('Email team · @jdoe', { JDOE }), '- [ ] Email team \\· @jdoe · @jdoe')
+  -- Backslashes right before a dot are doubled; nothing else changes.
+  eq(line('a \\· b'), '- [ ] a \\\\· b')
+  eq(line('a · b \\ c'), '- [ ] a · b \\ c')
+  -- With owners hidden, nothing is escaped.
+  eq(
+    story.task_line({ description = 'Email team · @jdoe', owner_ids = { JDOE } }, REFS, false),
+    '- [ ] Email team · @jdoe'
+  )
+  -- Read back.
+  local p = assert(parse.parse(story.render(
+    fixture_story(function(s)
+      s.tasks[3].description = 'Email team · @jdoe'
+      s.tasks[2].description = 'x \\· y · @a'
+    end),
+    REFS
+  )))
+  eq(
+    p.tasks[1],
+    { line = 22, complete = true, description = 'x \\· y · @a', owners = { 'jdoe' } }
+  )
+  eq(p.tasks[2], { line = 23, complete = false, description = 'Email team · @jdoe', owners = {} })
+  -- A typed `\·` is a literal dot.
+  eq(story.unescape_task('Email team \\· @jdoe'), 'Email team · @jdoe')
+end
+
+T['task descriptions round-trip, whatever they contain'] = function()
+  local alphabet = { 'a', 'b', ' ', ' ', '·', '\\', '@', '@x', ' · ', ' · @y' }
+  local seed = 12345
+  local function rand(n)
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return math.floor(seed / 65536) % n + 1
+  end
+  for _ = 1, 2000 do
+    local parts = {}
+    for i = 1, rand(8) do
+      parts[i] = alphabet[rand(#alphabet)]
+    end
+    local description = vim.trim(table.concat(parts))
+    if description ~= '' then
+      for _, owner_ids in ipairs({ {}, { JDOE, ALEX } }) do
+        local text = story
+          .task_line({ description = description, owner_ids = owner_ids }, REFS, true)
+          :gsub('^%- %[ %] ', '')
+        local d, owners = parse.split_owners(text)
+        eq(
+          { description, #owner_ids, story.unescape_task(d), #owners },
+          { description, #owner_ids, description, #owner_ids }
+        )
+      end
+    end
+  end
+end
+
 ---------------------------------------------------------------------------------------------------
 -- diff()
 ---------------------------------------------------------------------------------------------------
@@ -649,6 +710,49 @@ T['diff()']['tasks']['toggle, edit and owners'] = function()
     delete = {},
   })
   eq(diff.summary(assert(c)), '3 tasks updated')
+end
+
+T['diff()']['tasks']['a description ending in · @word is not read as owners'] = function()
+  local s = fixture_story(function(x)
+    x.tasks[3].description = 'Email team · @jdoe'
+  end)
+  eq(story.render(s, REFS)[23], '- [ ] Email team \\· @jdoe')
+  -- Editing the text keeps the suffix in the description.
+  local c, errors = changes(function(lines)
+    lines[23] = lines[23]:gsub('team', 'crew')
+  end, { story = s })
+  eq(errors, {})
+  eq(assert(c).tasks.update, {
+    {
+      id = 312,
+      line = 23,
+      description = 'Email crew · @jdoe',
+      fields = { description = 'Email crew · @jdoe' },
+    },
+  })
+  -- Appending a mention adds to the description, not an owner.
+  c, errors = changes(function(lines)
+    lines[23] = lines[23] .. ' @Alex.Smith'
+  end, { story = s })
+  eq(errors, {})
+  eq(assert(c).tasks.update, {
+    {
+      id = 312,
+      line = 23,
+      description = 'Email team · @jdoe @Alex.Smith',
+      fields = { description = 'Email team · @jdoe @Alex.Smith' },
+    },
+  })
+  -- A real owners suffix after it still works.
+  c, errors = changes(function(lines)
+    lines[23] = lines[23] .. ' · @Alex.Smith'
+  end, { story = s })
+  eq(errors, {})
+  eq(assert(c).tasks.update, {
+    { id = 312, line = 23, description = 'Email team · @jdoe', fields = { owner_ids = { ALEX } } },
+  })
+  -- Untouched: nothing.
+  eq(diff.is_empty(assert(changes(nil, { story = s }))), true)
 end
 
 T['diff()']['tasks']['changing owners'] = function()

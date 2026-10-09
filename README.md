@@ -217,8 +217,10 @@ Description…
 - **Title and description:** `# <title>`, then the description as written in Shortcut.
 - **Tasks**, in Shortcut's order. The section is always there, even when empty. A task's owners
   follow its description: the **last** ` · ` followed only by `@mention`s holds the owners, and
-  everything before it is the description. (So a task description that itself ends in
-  ` · @name` is misread as having an owner.) Set `tasks.show_owners = false` to hide owners.
+  everything before it is the description. A description that itself ends in ` · @name` is
+  shown with a backslash before that dot (`Email team \· @name`), so it is never read as
+  owners; a backslash right before a `·` in a description is shown doubled. Set
+  `tasks.show_owners = false` to hide owners.
 - **Comments** are read-only: oldest first, each with its author and local time, the body
   quoted; replies are nested one quote level deeper under the comment they answer. Deleted
   comments are left out (a deleted comment with replies shows as `*(deleted comment)*`).
@@ -261,7 +263,8 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
 - **Tasks:** `- [ ] description` lines in the tasks section. Toggle `[ ]`/`[x]`, edit the text,
   add lines (new tasks are added at the end of the list), or delete lines. Owners are the
   trailing ` · @mention @mention` part: add, change or remove it (removing it removes the
-  owners). Unknown or disabled members are errors on that line. With
+  owners). Unknown or disabled members are errors on that line. To end a description with a
+  literal ` · @name`, write the dot as `\·` (`\\·` for a backslash followed by a dot). With
   `tasks.show_owners = false`, owners are not shown and never changed: a ` · @name` you type is
   part of the description. Reordering tasks is not saved. Blank lines are fine there; any other
   line is an error.

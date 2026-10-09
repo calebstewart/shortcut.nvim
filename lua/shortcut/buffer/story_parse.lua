@@ -83,41 +83,9 @@ local function blank(s)
   return s:match('^%s*$') ~= nil
 end
 
---- Split a task's text into its description and owners: the last ` · ` followed only by
---- `@mention`s separates them.
----@param text string
----@return string description
----@return string[] owners
-function M.split_owners(text)
-  local sep = story.SEPARATOR
-  local last ---@type integer?
-  local from = 1
-  while true do
-    local i = text:find(sep, from, true)
-    if not i then
-      break
-    end
-    last = i
-    from = i + 1
-  end
-  if last then
-    local suffix = vim.trim(text:sub(last + #sep))
-    local owners = {}
-    local ok = suffix ~= ''
-    for word in suffix:gmatch('%S+') do
-      local mention = word:match('^@(.+)$')
-      if not mention then
-        ok = false
-        break
-      end
-      table.insert(owners, mention)
-    end
-    if ok then
-      return vim.trim(text:sub(1, last - 1)), owners
-    end
-  end
-  return vim.trim(text), {}
-end
+--- Split a task's text into its description (still escaped) and owners: the last ` · `
+--- followed only by `@mention`s separates them. See `story.split_owners()`.
+M.split_owners = story.split_owners
 
 --- Parse one line of the tasks section.
 ---@param line string
@@ -141,6 +109,7 @@ local function task_line(line, show_owners)
   local description, owners ---@type string, string[]
   if show_owners then
     description, owners = M.split_owners(rest)
+    description = story.unescape_task(description)
   else
     description, owners = vim.trim(rest), {}
   end
