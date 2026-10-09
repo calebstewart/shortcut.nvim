@@ -202,6 +202,93 @@ T['shortcut://'][':e! reloads and ignores superseded results'] = function()
   eq(lines(), { 'second' })
 end
 
+T['shortcut://']['highlighting is restarted by :e!'] = function()
+  child.lua([[
+    _G.filetype_events = 0
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'markdown',
+      callback = function() _G.filetype_events = _G.filetype_events + 1 end,
+    })
+  ]])
+  local function highlighted()
+    return child.lua_get('vim.treesitter.highlighter.active[vim.api.nvim_get_current_buf()] ~= nil')
+  end
+  for _, name in ipairs({ 'shortcut://story/42', 'shortcut://epic/7' }) do
+    child.lua('_G.filetype_events = 0')
+    edit(name)
+    eq(child.lua_get('_G.filetype_events'), 1)
+    eq(highlighted(), true)
+    child.cmd('edit!')
+    settle()
+    eq(highlighted(), true)
+    -- FileType fires again, as for a file, so the markdown ftplugin restarts treesitter.
+    eq(child.lua_get('_G.filetype_events'), 2)
+    eq(child.bo.filetype, 'markdown')
+    eq(child.bo.modeline, false)
+  end
+end
+
+T['shortcut://']['a background reload keeps the highlighting without FileType'] = function()
+  child.lua([[
+    _G.filetype_events = 0
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'markdown',
+      callback = function() _G.filetype_events = _G.filetype_events + 1 end,
+    })
+  ]])
+  edit('shortcut://story/42')
+  eq(child.lua_get('_G.filetype_events'), 1)
+  eq(child.lua('return handlers.reload(vim.api.nvim_get_current_buf())'), true)
+  settle()
+  eq(child.lua_get('_G.filetype_events'), 1)
+  eq(
+    child.lua_get('vim.treesitter.highlighter.active[vim.api.nvim_get_current_buf()] ~= nil'),
+    true
+  )
+  child.cmd('edit!')
+  settle()
+  eq(child.lua_get('_G.filetype_events'), 2)
+end
+
+T['shortcut://']['FileType handlers never see server text with modelines on'] = function()
+  -- With 'cpoptions' containing `S`, a hidden buffer loses its filetype, and running FileType
+  -- for it (in an autocommand window) copies the global 'modeline' into it: a handler running
+  -- some User event then applies the modelines of whatever the buffer holds at that point.
+  child.lua([[
+    handlers.register('story', {
+      load = function(buf, id, opts, done) done(nil, { '# Story ' .. id, 'vim: set tw=7 sw=3 :' }) end,
+    })
+    vim.o.hidden = true
+    vim.o.modeline = true
+    vim.opt.cpoptions:append('S')
+    vim.api.nvim_create_autocmd('User', { pattern = 'ShortcutTest', command = '' })
+    _G.seen = {}
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'markdown',
+      callback = function()
+        vim.cmd('doautocmd User ShortcutTest')
+        -- Options are copied in again later on: look at them now.
+        table.insert(_G.seen, {
+          lines = vim.api.nvim_buf_get_lines(0, 0, -1, false),
+          tw = vim.bo.textwidth,
+          sw = vim.bo.shiftwidth,
+        })
+      end,
+    })
+  ]])
+  edit('shortcut://story/42')
+  local buf = child.api.nvim_get_current_buf()
+  eq(lines(), { '# Story 42', 'vim: set tw=7 sw=3 :' })
+  child.cmd('enew')
+  eq(child.lua('return handlers.reload(...)', { buf }), true)
+  settle()
+  eq(lines(buf), { '# Story 42', 'vim: set tw=7 sw=3 :' })
+  local seen = child.lua_get('_G.seen')
+  eq(#seen, 2)
+  eq(seen[2].lines, { 'Loading sc-42…' })
+  eq({ seen[2].tw, seen[2].sw == 3 }, { 0, false })
+end
+
 T['shortcut://']['a non-canonical spelling switches to the canonical buffer'] = function()
   edit('shortcut://story/0042')
   eq(cur_name(), 'shortcut://story/42')
