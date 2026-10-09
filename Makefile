@@ -18,7 +18,7 @@ export SNACKS_NVIM
 JOBS ?=
 export NVIM_BIN JOBS
 
-.PHONY: test test-file deps deps-snacks doc-check fmt fmt-check typecheck clean
+.PHONY: test test-file deps deps-snacks fmt fmt-check typecheck clean
 
 test: deps
 	sh tests/run.sh

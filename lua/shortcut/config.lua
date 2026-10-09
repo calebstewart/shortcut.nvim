@@ -179,6 +179,25 @@ function M.get()
   return current
 end
 
+--- Every option, as a dotted path (`cache.ttl`), sorted. (The documentation is checked against
+--- this.)
+---@return string[]
+function M.option_names()
+  local names = {}
+  local function walk(section, prefix)
+    for key, spec in pairs(section) do
+      if is_leaf(spec) then
+        table.insert(names, prefix .. key)
+      else
+        walk(spec, prefix .. key .. '.')
+      end
+    end
+  end
+  walk(schema, '')
+  table.sort(names)
+  return names
+end
+
 --- Forget any configuration (for tests).
 function M._reset()
   current = nil

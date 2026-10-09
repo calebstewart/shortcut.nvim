@@ -37,6 +37,9 @@
           ./lua
           ./plugin
           ./tests
+          # The documentation tests check these against the code.
+          ./doc
+          ./README.md
           ./Makefile
           ./.stylua.toml
         ];
