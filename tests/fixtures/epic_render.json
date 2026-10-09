@@ -1,0 +1,39 @@
+{
+  "app_url": "https://app.shortcut.com/example-workspace/epic/202",
+  "archived": false,
+  "deadline": "2026-12-15T23:00:00-05:00",
+  "description": "Epic intro.\n\nMore detail.\n",
+  "entity_type": "epic",
+  "epic_state_id": 522,
+  "group_ids": [
+    "00000000-0000-4000-8000-000000000201",
+    "00000000-0000-4000-8000-000000000202"
+  ],
+  "id": 202,
+  "label_ids": [
+    602,
+    601
+  ],
+  "labels": [
+    {
+      "archived": false,
+      "entity_type": "label",
+      "id": 602,
+      "name": "Frontend"
+    }
+  ],
+  "name": "Render Epic",
+  "owner_ids": [
+    "00000000-0000-4000-8000-000000000101",
+    "00000000-0000-4000-8000-000000000102"
+  ],
+  "planned_start_date": "2026-10-01T00:00:00Z",
+  "state": "in progress",
+  "stats": {
+    "num_stories_done": 3,
+    "num_stories_started": 2,
+    "num_stories_total": 7,
+    "num_stories_unstarted": 2
+  },
+  "updated_at": "2026-02-05T08:00:00Z"
+}
