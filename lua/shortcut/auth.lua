@@ -20,6 +20,7 @@
 ---
 --- The path is never derived from `stdpath()`: `NVIM_APPNAME` must not change where it is.
 local config = require('shortcut.config')
+local fs = require('shortcut.fs')
 
 local M = {}
 
@@ -92,11 +93,7 @@ function M.cli_config_path()
   return cli_paths().file
 end
 
----@param path string
----@return boolean
-local function exists(path)
-  return vim.uv.fs_stat(path) ~= nil
-end
+local exists = fs.exists
 
 ---@param path string
 ---@param err? string
@@ -305,28 +302,7 @@ function M.redacted(token)
   return '****' .. token:sub(-4)
 end
 
---- Create `dir` and any missing parents. Uses libuv only, so it works in fast contexts.
----@param dir string
----@param mode integer Mode of `dir` itself; created parents get 0755 (less the umask).
----@return boolean ok
----@return string? err
-local function mkdir_p(dir, mode)
-  if exists(dir) then
-    return true
-  end
-  local parent = vim.fs.dirname(dir)
-  if parent ~= dir then
-    local ok, err = mkdir_p(parent, tonumber('755', 8))
-    if not ok then
-      return false, err
-    end
-  end
-  local ok, err, code = vim.uv.fs_mkdir(dir, mode)
-  if not ok and code ~= 'EEXIST' then
-    return false, ('cannot create %s: %s'):format(dir, err)
-  end
-  return true
-end
+local mkdir_p = fs.mkdir_p
 
 --- Move a legacy CLI config dir into place, as the CLI itself does on startup, when the config
 --- file does not exist yet. `resolve()` reads the legacy file in that case, so writing a new file
@@ -372,44 +348,6 @@ local function migrate_legacy(paths)
   return true
 end
 
----@param path string
----@param data string
----@return boolean ok
----@return string? err
-local function write_atomic(path, data)
-  local dir = vim.fs.dirname(path)
-  local tmp = ('%s/.%s.%d.%d.tmp'):format(
-    dir,
-    vim.fs.basename(path),
-    vim.uv.os_getpid(),
-    vim.uv.hrtime()
-  )
-  local fd, err = vim.uv.fs_open(tmp, 'wx', tonumber('600', 8))
-  if not fd then
-    return false, ('cannot write %s: %s'):format(tmp, err)
-  end
-  local written, write_err = vim.uv.fs_write(fd, data, 0)
-  ---@type boolean?
-  local ok = written == #data
-  if ok then
-    ok, write_err = vim.uv.fs_fsync(fd)
-  end
-  if ok then
-    -- The mode given to open() is reduced by the umask; make it exactly 0600.
-    ok, write_err = vim.uv.fs_fchmod(fd, tonumber('600', 8))
-  end
-  vim.uv.fs_close(fd)
-  if ok then
-    ok, write_err = vim.uv.fs_rename(tmp, path)
-  end
-  if not ok then
-    write_err = write_err or 'short write'
-    vim.uv.fs_unlink(tmp)
-    return false, ('cannot write %s: %s'):format(path, write_err)
-  end
-  return true
-end
-
 --- Merge `fields` into the `short` CLI config file, keeping every other key (notably
 --- `workspaces`). Creates the directory if needed, writes atomically (temp file + rename in the
 --- same directory) and leaves the file with mode 0600. Used by `:Shortcut login` only.
@@ -442,7 +380,7 @@ function M.write_cli_config(fields)
   if not ok then
     return nil, err
   end
-  ok, err = write_atomic(path, vim.json.encode(merged))
+  ok, err = fs.write_atomic(path, vim.json.encode(merged))
   if not ok then
     return nil, err
   end
