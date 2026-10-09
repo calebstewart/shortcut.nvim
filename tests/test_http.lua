@@ -602,7 +602,18 @@ T['user()']['asks the API for an environment token'] = function()
   eq(child.lua_get('_G.out'), { u = { mention_name = 'jdoe', url_slug = 'acme' } })
 end
 
-T['slug source'] = new_set()
+T['slug source'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- Only routing matters here, not the story loader.
+      child.lua([[
+        require('shortcut.buffer.handlers').register('story', {
+          load = function(buf, id, opts, done) done(nil, { 'story' }) end,
+        })
+      ]])
+    end,
+  },
+})
 
 T['slug source']['warns when a URL is for another workspace than the token'] = function()
   child.lua([[_G.routes = function() return { status = 200, fixture = 'member' } end]])

@@ -5,11 +5,21 @@ local child = MiniTest.new_child_neovim()
 
 local URL = 'https://app.shortcut.com/acme/story/123/some-slug'
 
+-- Routing tests don't need the real story loader (see test_story.lua): this one renders a fixed
+-- text without any request.
+local STUB_STORY = [[
+  require('shortcut.buffer.handlers').register('story', {
+    load = function(buf, id, opts, done) done(nil, { '# Story ' .. id }) end,
+    save = function(buf, id, opts, done) done('stub') end,
+  })
+]]
+
 local T = new_set({
   hooks = {
     pre_case = function()
       child.restart({ '-u', 'tests/minimal_init.lua' })
-      child.lua([[
+      child.lua(
+        [[
         _G.messages = {}
         vim.notify = function(msg, level) table.insert(_G.messages, { msg = msg, level = level }) end
 
@@ -23,6 +33,7 @@ local T = new_set({
         -- Routing tests: sc-<id> is a story unless a test says otherwise. The default (API)
         -- resolver is tested in 'sc-<id> API resolver'.
         handlers.set_resolver(nil)
+        loadstring(...)()
 
         -- Work in a scratch directory with a known starting buffer.
         _G.dir = vim.fn.tempname() .. '/'
@@ -30,7 +41,9 @@ local T = new_set({
         vim.cmd.cd(vim.fn.fnameescape(_G.dir))
         vim.fn.writefile({ 'start' }, 'start.txt')
         vim.cmd.edit('start.txt')
-      ]])
+      ]],
+        { STUB_STORY }
+      )
     end,
     post_once = child.stop,
   },
@@ -99,10 +112,10 @@ end
 
 T['shortcut://'] = new_set()
 
-T['shortcut://']['loads with the placeholder'] = function()
+T['shortcut://']['loads through the registered handler'] = function()
   edit('shortcut://story/42')
   eq(cur_name(), 'shortcut://story/42')
-  eq(lines(), { '# Story 42', '', 'Rendering stories is not implemented yet.' })
+  eq(lines(), { '# Story 42' })
   eq(child.bo.buftype, 'acwrite')
   eq(child.bo.swapfile, false)
   eq(child.bo.filetype, 'markdown')
@@ -235,11 +248,11 @@ T['shortcut://'][':w keeps modified if the buffer changed during the save'] = fu
 end
 
 T['shortcut://'][':w with the placeholder says saving is unsupported'] = function()
-  edit('shortcut://story/5')
+  edit('shortcut://epic/5')
   child.api.nvim_buf_set_lines(0, 0, -1, false, { 'edited' })
   child.cmd('write')
   eq(child.bo.modified, true)
-  eq(messages()[1].msg, 'shortcut.nvim: failed to save sc-5: saving stories is not supported yet')
+  eq(messages()[1].msg, 'shortcut.nvim: failed to save sc-5: saving epics is not supported yet')
 end
 
 T['shortcut://'][':w is refused unless the load succeeded'] = function()
@@ -437,6 +450,10 @@ T['redirect details']['work from the command line'] = function()
     'lua _G.requests = {}; vim.net.request = function(url) table.insert(_G.requests, url) end',
     '--cmd',
     'lua _G.messages = {}; vim.notify = function(msg) table.insert(_G.messages, msg) end',
+    '--cmd',
+    'lua vim.opt.rtp:prepend(vim.fn.getcwd())',
+    '--cmd',
+    'lua ' .. STUB_STORY:gsub('\n', ' '),
     '-u',
     'tests/minimal_init.lua',
     URL,
@@ -541,9 +558,17 @@ end
 
 T['sc-<id> API resolver']['is the default, and is not loaded at startup'] = function()
   child.restart({ '-u', 'tests/minimal_init.lua' })
-  for _, mod in ipairs({ 'shortcut.http', 'shortcut.api.stories', 'shortcut.api.epics' }) do
+  for _, mod in ipairs({
+    'shortcut.http',
+    'shortcut.api.stories',
+    'shortcut.api.epics',
+    'shortcut.buffer.story',
+    'shortcut.buffer.frontmatter',
+    'shortcut.cache',
+  }) do
     eq(child.lua_get('package.loaded[...] == nil', { mod }), true)
   end
+  child.lua(STUB_STORY)
   -- Nothing set: sc-<id> goes to the API, story first, then epic.
   child.lua([[
     _G.messages = {}
@@ -917,6 +942,7 @@ end
 T['net plugin']['being disabled is fine'] = function()
   child.restart({ '--cmd', 'let g:loaded_nvim_net_plugin = 1', '-u', 'tests/minimal_init.lua' })
   child.lua([[_G.messages = {}; vim.notify = function(msg) table.insert(_G.messages, msg) end]])
+  child.lua(STUB_STORY)
   edit(URL)
   eq(cur_name(), 'shortcut://story/123')
   eq(messages(), {})

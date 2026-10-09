@@ -6,7 +6,8 @@
 --- every window showing it to the canonical buffer and then deletes it.
 ---
 --- How objects are loaded and saved is pluggable: renderers call `register()` for their kind.
---- Until then a placeholder is used.
+--- Stories are handled by `shortcut.buffer.story`, loaded on first use; epics use a placeholder
+--- until their renderer exists.
 local notify = require('shortcut.notify')
 local uri = require('shortcut.uri')
 
@@ -65,8 +66,29 @@ local function placeholder(kind)
   }
 end
 
+--- A handler that requires `module` (exporting `handler`) only when first used, so nothing
+--- heavy is loaded at startup.
+---@param module string
+---@return shortcut.buffer.Handler
+local function lazy(module)
+  local function get()
+    return require(module).handler --[[@as shortcut.buffer.Handler]]
+  end
+  return {
+    load = function(...)
+      return get().load(...)
+    end,
+    save = function(...)
+      return assert(get().save)(...)
+    end,
+    jump = function(...)
+      return assert(get().jump)(...)
+    end,
+  }
+end
+
 ---@type table<shortcut.Kind, shortcut.buffer.Handler>
-local registry = { story = placeholder('story'), epic = placeholder('epic') }
+local registry = { story = lazy('shortcut.buffer.story'), epic = placeholder('epic') }
 
 --- The default resolver: `GET /stories/<id>`, and on 404 `GET /epics/<id>`.
 ---
@@ -291,6 +313,10 @@ local function load(buf, target, opts)
     target.id
   vim.bo[buf].buftype = 'acwrite'
   vim.bo[buf].swapfile = false
+  -- The content comes from the server (comments, names...): never let it set options. Neovim
+  -- applies modelines again whenever an autocommand runs for the buffer with modelines enabled
+  -- (e.g. `:doautocmd`, or `nvim_exec_autocmds()` for some plugin's User event).
+  vim.bo[buf].modeline = false
   vim.b[buf].shortcut = { kind = kind, id = id }
   if vim.bo[buf].filetype ~= 'markdown' then
     vim.bo[buf].filetype = 'markdown'
@@ -729,6 +755,17 @@ function M.setup()
     pattern = WEB_PATTERNS,
     desc = 'shortcut.nvim: open Shortcut URL',
     callback = on_web_read,
+  })
+  vim.api.nvim_create_autocmd({ 'BufEnter', 'BufWinEnter' }, {
+    group = group,
+    pattern = 'shortcut://*',
+    desc = 'shortcut.nvim: keep modelines off',
+    callback = function(ev)
+      -- With 'cpoptions' containing `S`, entering a buffer copies the global options into it,
+      -- 'modeline' included. Modelines are applied after the autocommands for an event, so
+      -- turning it off again here keeps server text from setting options.
+      vim.bo[ev.buf].modeline = false
+    end,
   })
   vim.api.nvim_create_autocmd('BufUnload', {
     group = group,

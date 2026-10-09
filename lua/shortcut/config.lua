@@ -12,6 +12,7 @@ local M = {}
 ---@field sc_ids boolean Allow `:e sc-<id>` to open stories/epics.
 ---@field picker shortcut.Config.Picker
 ---@field http shortcut.Config.Http
+---@field tasks shortcut.Config.Tasks
 
 ---@class shortcut.Config.Cache
 ---@field ttl integer Lookup-list cache lifetime, in seconds.
@@ -23,6 +24,9 @@ local M = {}
 ---@class shortcut.Config.Http
 ---@field timeout integer Request timeout, in seconds.
 
+---@class shortcut.Config.Tasks
+---@field show_owners boolean Show task owners as a trailing ` · @mention ...` on task lines.
+
 ---@type shortcut.Config
 local defaults = {
   token = nil,
@@ -31,6 +35,7 @@ local defaults = {
   sc_ids = true,
   picker = { page_size = 25, max_results = 200 },
   http = { timeout = 30 },
+  tasks = { show_owners = true },
 }
 
 ---@param v any
@@ -61,6 +66,9 @@ local schema = {
   },
   http = {
     timeout = { positive_integer, false, 'positive integer (seconds)' },
+  },
+  tasks = {
+    show_owners = { 'boolean' },
   },
 }
 
