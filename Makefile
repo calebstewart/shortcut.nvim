@@ -13,12 +13,17 @@ SNACKS_REV := 882c996cf28183f4d63640de0b4c02ec886d01f2
 SNACKS_URL := https://github.com/folke/snacks.nvim
 export SNACKS_NVIM
 
+# Test files run in parallel, one Neovim each: JOBS at a time (default: one per CPU; JOBS=1 runs
+# them one after another). VERBOSE=1 prints every file's output, not only the failures'.
+JOBS ?=
+export NVIM_BIN JOBS
+
 .PHONY: test test-file deps deps-snacks fmt fmt-check typecheck clean
 
 test: deps
-	$(NVIM_BIN) --headless --noplugin -u tests/minimal_init.lua -c "lua MiniTest.run()"
+	sh tests/run.sh
 
-# Run a single test file: make test-file FILE=tests/test_config.lua
+# Run a single test file, with its output as it runs: make test-file FILE=tests/test_config.lua
 test-file: deps
 	$(NVIM_BIN) --headless --noplugin -u tests/minimal_init.lua -c "lua MiniTest.run_file('$(FILE)')"
 

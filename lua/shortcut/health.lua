@@ -174,6 +174,60 @@ local function check_snacks()
   end
 end
 
+local function check_git()
+  if vim.fn.executable('git') == 1 then
+    vim.health.ok(
+      ('git (%s): the current story can come from the git branch'):format(vim.fn.exepath('git'))
+    )
+  else
+    vim.health.warn('git not found: the current story cannot come from the git branch', {
+      'Install git to use :Shortcut story (and comment, state, ...) without an argument.',
+    })
+  end
+end
+
+local function check_routing()
+  local status = require('shortcut.buffer.handlers').status()
+  local enabled = require('shortcut.config').get().sc_ids
+  if status.sc_ids then
+    vim.health.ok('`:e sc-<id>` opens stories and epics (sc_ids = true)')
+  elseif enabled then
+    vim.health.warn('sc_ids = true, but the sc-<id> handler is not registered', {
+      "Call require('shortcut').setup() again, or restart Neovim.",
+    })
+  else
+    vim.health.info('`:e sc-<id>` is turned off (sc_ids = false)')
+  end
+
+  if status.net == 'guarded' then
+    vim.health.ok("Neovim's built-in https:// handler skips Shortcut story and epic links")
+  elseif status.net == 'absent' then
+    vim.health.ok("Neovim's built-in https:// handler is not loaded: nothing to skip")
+  else
+    vim.health.warn(
+      "Neovim's built-in https:// handler would download Shortcut links as web pages",
+      {
+        'It was set up after shortcut.nvim guarded it. Run '
+          .. ":lua require('shortcut.buffer.handlers').guard_net_plugin(), and report this.",
+      }
+    )
+  end
+
+  if not enabled then
+    vim.health.info('`gf` on sc-<id> is turned off too (sc_ids = false); on links it still works')
+  elseif status.includeexpr == 'global' then
+    vim.health.ok("`gf` on sc-<id> works in buffers without their own 'includeexpr'")
+  else
+    vim.health.info(
+      (
+        "the global 'includeexpr' is set elsewhere (%s): `gf` on sc-<id> works where it is "
+        .. "chained (gitcommit buffers, or require('shortcut').chain_includeexpr() in "
+        .. 'after/ftplugin/<filetype>.lua)'
+      ):format(vim.go.includeexpr == '' and 'empty' or vim.go.includeexpr)
+    )
+  end
+end
+
 function M.check()
   vim.health.start('shortcut.nvim')
   check_neovim()
@@ -185,8 +239,12 @@ function M.check()
   vim.health.start('Lookup-list cache')
   check_cache(slug)
 
+  vim.health.start('Opening links and sc-<id>')
+  check_routing()
+
   vim.health.start('Optional dependencies')
   check_snacks()
+  check_git()
 end
 
 return M

@@ -639,7 +639,8 @@ local function fallback_cr()
   if m then
     local ok, err = pcall(replay, m)
     if not ok then
-      require('shortcut.notify').error(tostring(err))
+      local notify = require('shortcut.notify')
+      notify.error(notify.strip_location(err))
     end
     return
   end
@@ -682,7 +683,8 @@ function M.open_at_cursor()
     end
   end)
   if not ok then
-    require('shortcut.notify').error((tostring(err):gsub('^[^\n]-:%d+: ', '', 1)))
+    local notify = require('shortcut.notify')
+    notify.error(notify.strip_location(err))
   end
 end
 
@@ -855,7 +857,7 @@ M.handler = {
       if not ok then
         snapshots[buf] = nil
         -- Without the `file:line: ` prefix of the error.
-        return done((tostring(apply_err):gsub('^[^\n]-:%d+: ', '', 1)))
+        return done(require('shortcut.notify').strip_location(apply_err))
       end
       map_cr(buf)
       done()

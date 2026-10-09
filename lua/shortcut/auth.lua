@@ -194,8 +194,10 @@ local function token_from_setup()
   if type(t) == 'function' then
     local ok, result = pcall(t)
     if not ok then
-      -- Keep only the first line: no traceback.
-      local msg = vim.split(tostring(result), '\n', { plain = true })[1]
+      -- Only the first line, without the position Lua adds (`init.lua:12: `).
+      local msg = require('shortcut.notify').strip_location(
+        vim.split(tostring(result), '\n', { plain = true })[1]
+      )
       return nil, ('the `token` function passed to setup() failed: %s'):format(msg)
     end
     local token = nonempty_string(result)

@@ -228,6 +228,31 @@ T['files in the comments section are never sent'] = function()
   eq(child.bo.modified, false)
 end
 
+T['edits to comments alone are put back, not left showing as saved'] = function()
+  local loaded = lines()
+  local row
+  for i, l in ipairs(loaded) do
+    if l == '> Meeting notes.' then
+      row = i
+    end
+  end
+  eq(type(row), 'number')
+  set_line(row, '> Edited notes.')
+  child.api.nvim_buf_set_lines(0, -1, -1, false, { '', 'A line typed at the end.' })
+  eq(child.bo.modified, true)
+  write()
+  eq(writes(), {})
+  eq(last_message(), {
+    msg = 'shortcut.nvim: sc-301: no changes (comments are read-only: restored)',
+    level = INFO,
+  })
+  eq(lines(), loaded)
+  eq(child.bo.modified, false)
+  -- The restore can be undone, like any change.
+  child.cmd('undo')
+  eq(lines()[row], '> Edited notes.')
+end
+
 T['edits are sent in one PUT, then the story is reloaded'] = function()
   set_line(12, '# New title')
   set_line(4, 'state: Done')

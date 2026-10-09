@@ -1,0 +1,916 @@
+*shortcut.txt*  Browse, search and edit Shortcut stories and epics
+
+                                                    *shortcut.nvim* *shortcut*
+
+Browse, search and edit Shortcut (https://www.shortcut.com) stories and epics
+without leaving Neovim. Stories and epics open as Markdown buffers: `:e` a
+story link or `sc-12345`, edit it, and `:w` saves it back to Shortcut.
+Authentication is shared with the `short` CLI, so if you already use it there
+is nothing to set up.
+
+==============================================================================
+CONTENTS                                                   *shortcut-contents*
+
+  1. Requirements .................................... |shortcut-requirements|
+  2. Installation ......................................... |shortcut-install|
+  3. Logging in .............................................. |shortcut-auth|
+  4. Configuration ......................................... |shortcut-config|
+  5. Commands ............................................ |shortcut-commands|
+  6. Opening stories and epics ............................ |shortcut-opening|
+  7. Story buffers ................................... |shortcut-story-buffer|
+  8. Editing stories ...................................... |shortcut-editing|
+  9. Creating stories ...................................... |shortcut-create|
+ 10. Comments ....................................... |shortcut-comment-float|
+ 11. Epic buffers ..................................... |shortcut-epic-buffer|
+ 12. Pickers .............................................. |shortcut-pickers|
+ 13. Lookup-list cache ...................................... |shortcut-cache|
+ 14. Highlights ........................................ |shortcut-highlights|
+ 15. Lua API .................................................. |shortcut-lua|
+ 16. Troubleshooting .............................. |shortcut-troubleshooting|
+
+==============================================================================
+1. REQUIREMENTS                                        *shortcut-requirements*
+
+- Neovim 0.12 or later
+- `curl`
+- Optional: `git`, to find the story of the current branch
+  (|shortcut-current-story|)
+- Optional: snacks.nvim (https://github.com/folke/snacks.nvim) for live
+  search with previews; without it the pickers use |vim.ui.select()|
+  (|shortcut-picker-fallback|)
+
+==============================================================================
+2. INSTALLATION                                             *shortcut-install*
+
+With lazy.nvim: >lua
+    {
+      'calebstewart/shortcut.nvim',
+      dependencies = { { 'folke/snacks.nvim', optional = true } },
+      opts = {},
+    }
+<
+With Neovim's built-in package support (|packages|), clone the repository
+into a `pack/*/start` directory, or into `pack/*/opt` and |:packadd| it: >sh
+    git clone https://github.com/calebstewart/shortcut.nvim \
+      ~/.local/share/nvim/site/pack/plugins/start/shortcut.nvim
+<
+Calling `setup()` is optional: without it the defaults apply
+(|shortcut-config|).
+
+Don't lazy-load the plugin on the `:Shortcut` command alone: it also opens
+Shortcut links, `sc-<id>` names and `shortcut://` buffers given to `:edit`
+or on the command line, which only works if it is loaded at startup. Loading
+it costs well under a millisecond: the plugin file only registers the
+command and a few autocommands, and everything else is loaded on first use.
+
+Nix ~
+The flake provides the plugin as a package, `packages.<system>.default`, and
+through an overlay as `pkgs.vimPlugins.shortcut-nvim`. Add the input to your
+flake: >nix
+    # flake.nix
+    {
+      inputs.shortcut-nvim.url = "github:calebstewart/shortcut.nvim";
+      # ...
+    }
+<
+Then, in your NixOS or home-manager configuration (with `inputs` passed to
+it, e.g. through `specialArgs` or `extraSpecialArgs`): >nix
+    { inputs, pkgs, ... }:
+    {
+      nixpkgs.overlays = [ inputs.shortcut-nvim.overlays.default ];
+
+      # home-manager
+      programs.neovim.plugins = [ pkgs.vimPlugins.shortcut-nvim ];
+    }
+<
+The package puts `curl` and `git` on the `PATH` of Neovim wrappers that add
+plugins' runtime dependencies. To try the plugin without installing anything
+(in an isolated configuration, with snacks.nvim, not your own config): >sh
+    nix run github:calebstewart/shortcut.nvim
+<
+==============================================================================
+3. LOGGING IN                                                  *shortcut-auth*
+
+shortcut.nvim needs a Shortcut API token (create one in Shortcut under
+Settings, API Tokens). It looks in these places, in order, and uses the first
+token it finds:
+
+1. The `token` option of `setup()` (|shortcut-config.token|): a string, or a
+   function returning one. A function is called once per Neovim session, so
+   it can read the token from a password manager.
+2. The `SHORTCUT_API_TOKEN` environment variable, or the older
+   `CLUBHOUSE_API_TOKEN`.
+3. The config file of the `short` CLI
+   (https://github.com/shortcut-cli/shortcut-cli). If you have run
+   `short install`, there is nothing else to do. The file is found exactly
+   where `short` looks for it: `~/.config/shortcut-cli/config.json`, or
+   `$XDG_CONFIG_HOME/shortcut-cli/config.json` when `XDG_CONFIG_HOME` is
+   set. Like `short`, when `XDG_CONFIG_HOME` is unset but `XDG_DATA_HOME` is
+   set, it uses `$XDG_DATA_HOME/.config/shortcut-cli/config.json`.
+   |shortcut-config.cli_config_path| uses a different file, and
+   `require('shortcut.auth').cli_config_path()` shows the path in use.
+
+Without a token, every command says how to provide one.
+
+Your mention name (for |:Shortcut-mine|) and workspace (for links) are read
+from the `short` config file when its token is the one in use; otherwise
+they are fetched once per session from the API.
+
+                                                     *shortcut-token-function*
+A `token` function that reads the token from a password manager's command
+line tool should fail when the command does, rather than return its error
+message as the token: >lua
+    --- The first line a command prints, or an error if it fails.
+    local function command_token(cmd)
+      local res = vim.system(cmd, { text = true }):wait()
+      if res.code ~= 0 then
+        error(('%s failed: %s'):format(cmd[1], vim.trim(res.stderr or '')))
+      end
+      return vim.trim(vim.split(res.stdout or '', '\n')[1])
+    end
+
+    require('shortcut').setup({
+      token = function()
+        return command_token({ 'pass', 'show', 'shortcut/api-token' })
+      end,
+    })
+<
+Other password managers only need another command: >lua
+    -- macOS Keychain
+    { 'security', 'find-generic-password', '-s', 'shortcut-api-token', '-w' }
+    -- 1Password CLI
+    { 'op', 'read', 'op://Private/Shortcut/token' }
+<
+If the function raises an error or returns something other than a non-empty
+string, commands report that (without a stack trace) and send nothing.
+
+The token is never shown in messages: at most its last four characters. It is
+passed to `curl` on its standard input, never on its command line, where
+other users could see it with `ps`.
+
+Use |:Shortcut-login| to save a token to the `short` config file.
+
+==============================================================================
+4. CONFIGURATION                                             *shortcut-config*
+
+                                                            *shortcut.setup()*
+`require('shortcut').setup({opts})` configures the plugin. It is optional,
+and may be called again: each call starts from the defaults. Invalid options
+are reported and leave the previous configuration in place; unknown options
+only produce a warning (they are most likely typos).
+
+The defaults: >lua
+    require('shortcut').setup({
+      token = nil,
+      cli_config_path = nil,
+      cache = { ttl = 24 * 60 * 60 },
+      sc_ids = true,
+      picker = { page_size = 25, max_results = 200 },
+      http = { timeout = 30 },
+      tasks = { show_owners = true, confirm_delete = true },
+      create = { workflow = nil, team = nil, template = nil },
+    })
+<
+                                                       *shortcut-config.token*
+token ~
+  `string` or `fun(): string`, default `nil`.
+  The API token, or a function returning it (|shortcut-token-function|).
+  Takes precedence over the environment and the `short` config file
+  (|shortcut-auth|).
+
+                                             *shortcut-config.cli_config_path*
+cli_config_path ~
+  `string`, default `nil`.
+  The `short` CLI config file to read the token (and mention name and
+  workspace) from, and that |:Shortcut-login| writes. By default, the file
+  `short` itself uses.
+
+                                                   *shortcut-config.cache.ttl*
+cache.ttl ~
+  Positive integer, in seconds, default `86400` (a day).
+  How long the lookup lists are used before they are fetched again in the
+  background (|shortcut-cache|).
+
+                                                      *shortcut-config.sc_ids*
+sc_ids ~
+  `boolean`, default `true`.
+  Whether `:e sc-<id>`, and |gf| on `sc-<id>`, open the story or epic
+  (|shortcut-sc-ids|, |shortcut-gf|). Set it to `false` if you have files
+  named like `sc-123` that you edit without a directory, or don't want the
+  lookups. Links and |:Shortcut-story| work either way.
+
+                                            *shortcut-config.picker.page_size*
+picker.page_size ~
+  Integer from 1 to 250, default `25`.
+  Results requested per search request (|shortcut-pickers|).
+
+                                          *shortcut-config.picker.max_results*
+picker.max_results ~
+  Positive integer, default `200`.
+  The most results a picker loads. The API never returns more than 1000.
+
+                                                *shortcut-config.http.timeout*
+http.timeout ~
+  Positive integer, in seconds, default `30`.
+  How long a request may take.
+
+                                           *shortcut-config.tasks.show_owners*
+tasks.show_owners ~
+  `boolean`, default `true`.
+  Show each task's owners at the end of its line, as ` · @mention`
+  (|shortcut-task-owners|). When `false`, owners are neither shown nor
+  changed, and ` · @name` typed on a task line is part of its description.
+
+                                        *shortcut-config.tasks.confirm_delete*
+tasks.confirm_delete ~
+  `boolean`, default `true`.
+  Ask before a save deletes tasks (|shortcut-delete-tasks|).
+
+                                             *shortcut-config.create.workflow*
+create.workflow ~
+  `string` (name) or integer (ID), default `nil`.
+  The workflow of new stories (|shortcut-create-defaults|). By default, the
+  default workflow of `create.team` if that team has one, else the
+  workspace's default workflow.
+
+                                                 *shortcut-config.create.team*
+create.team ~
+  `string`, default `nil`.
+  The team (by name, mention name or ID) new stories are assigned to.
+
+                                             *shortcut-config.create.template*
+create.template ~
+  `fun(fields): fields?`, default `nil`.
+  Customizes the template of |:Shortcut-create|. It is called with the fields
+  (`title`, `description`, `type`, `state`, `owners`, `epic`, `iteration`,
+  `estimate`, `labels`, `tasks`) and may change them, or return a new table.
+  `tasks` is a list of descriptions or of
+  `{ description, complete?, owners? }` tables: >lua
+    create = {
+      team = 'platform',
+      template = function(fields)
+        fields.description = '## Why\n\n## Acceptance criteria\n'
+        fields.tasks = { 'Write tests' }
+      end,
+    },
+<
+==============================================================================
+5. COMMANDS                                                *shortcut-commands*
+
+                                                                   *:Shortcut*
+:Shortcut {subcommand} [args]
+    The plugin's only command. Subcommand names are completed with <Tab>, and
+    so are the arguments of |:Shortcut-state| (state names) and
+    |:Shortcut-create| (keys and values). Without a subcommand, lists the
+    subcommands.
+
+                                                             *:Shortcut-story*
+:Shortcut story [{id} | sc-{id} | {url}]
+    Open a story (|shortcut-story-buffer|). Without an argument, the story of
+    the current git branch: the first `sc-<id>` in the branch name, as in
+    Shortcut's `<user>/sc-<id>/<slug>` format.
+
+                                                              *:Shortcut-epic*
+:Shortcut epic {id} | sc-{id} | {url}
+    Open an epic (|shortcut-epic-buffer|).
+
+                                                            *:Shortcut-search*
+:Shortcut search [{query}]
+    Search stories (|shortcut-pickers|). The arguments are joined into the
+    starting query, in Shortcut's search syntax (|shortcut-search-syntax|).
+
+                                                              *:Shortcut-mine*
+:Shortcut mine
+    Your unfinished stories:
+    `owner:<your mention name> !is:done !is:archived`. Typing filters this
+    list instead of searching again.
+
+                                                             *:Shortcut-epics*
+:Shortcut epics [{query}]
+    Search epics. Without a query, it starts with `!is:done !is:archived`
+    (epics that are not done), which you can edit.
+
+                                                            *:Shortcut-create*
+:Shortcut create [{key}={value} ...]
+    Open a draft of a new story; `:w` creates it (|shortcut-create|).
+
+                                                           *:Shortcut-comment*
+:Shortcut comment [{target}]
+    Write a comment on the current story in a floating window; `:w` posts it
+    (|shortcut-comment-float|).
+
+                                                             *:Shortcut-state*
+:Shortcut state [{target}] [{state}]
+    Move the current story to another workflow state. Without a state, the
+    states of the story's workflow are listed in order with
+    |vim.ui.select()|, the current one marked. A state name moves the story
+    directly: names are completed with <Tab> (the current story buffer's
+    workflow, or every workflow's), matched ignoring case, and may contain
+    spaces (`:Shortcut state In Progress`). The target, if any, comes first,
+    as `sc-<id>` or a link (`:Shortcut state sc-123 Done`). A bare ID is the
+    target only on its own (`:Shortcut state 123`): followed by more words it
+    is read as the start of the state name, so a state named `2 Review` never
+    moves story 2. The story's buffer, if open, is reloaded; if it has unsaved
+    changes, you are warned that its header is stale.
+
+                                                            *:Shortcut-browse*
+:Shortcut browse [{target}]
+    Open the current story or epic in the browser, with |vim.ui.open()|.
+
+                                                              *:Shortcut-yank*
+:Shortcut yank [{target}]
+    Copy the link of the current story or epic to the unnamed register and
+    the clipboard (`+`, and `*` when it is a separate selection, as on X11).
+
+                                                           *:Shortcut-refresh*
+:Shortcut refresh
+    Clear the lookup-list cache (|shortcut-cache|), in memory and on disk,
+    and fetch the lists again in the background. If the current buffer is a
+    story or epic without unsaved changes, it is reloaded too.
+
+                                                              *:Shortcut-diff*
+:Shortcut diff
+    In a story buffer: open the story as it is on Shortcut side by side with
+    the buffer, in diff mode (|shortcut-conflicts|). Close it to leave diff
+    mode.
+
+                                                             *:Shortcut-login*
+:Shortcut login
+    Ask for an API token (the input is hidden), check it against the API,
+    and save it with your mention name and workspace to the `short` config
+    file (|shortcut-config.cli_config_path|), keeping every other setting in
+    it. `short` picks up the same token. If the saved token is for a
+    different workspace, you are asked before it is replaced; an invalid
+    token saves nothing. A token from `setup()` or the environment still
+    takes precedence over the saved one, and you are told so. This is the
+    only thing in the plugin that writes that file.
+
+                                                              *:Shortcut-help*
+:Shortcut help
+    List the subcommands.
+
+------------------------------------------------------------------------------
+THE CURRENT STORY                                     *shortcut-current-story*
+
+`comment`, `state`, `browse` and `yank` work on "the current story", which is
+the first of:
+
+1. the argument ({target}), if given: an ID, `sc-<id>`, or a Shortcut link;
+2. the current buffer, if it is a story or epic buffer (or a comment being
+   written);
+3. the git branch of the current file's repository (or, for buffers that are
+   not files, of the working directory): the first `sc-<id>` in the branch
+   name. A detached HEAD or a directory outside git does not count.
+
+Otherwise the command explains how to name a story. `comment` and `state` work
+on stories; `browse` and `yank` on epics too (a bare ID is looked up to find
+out which it is).
+
+==============================================================================
+6. OPENING STORIES AND EPICS                                *shortcut-opening*
+
+Each story or epic is a single buffer named `shortcut://story/<id>` or
+`shortcut://epic/<id>`. Other ways of naming it switch to that buffer, and
+afterwards CTRL-^ returns to the buffer you came from.
+
+                                                               *shortcut-urls*
+- `:e https://app.shortcut.com/<workspace>/story/<id>/...` (or `/epic/<id>`):
+  a link copied from the web app. Neovim's built-in download of `https://`
+  files (|shortcut-net-handler|) is skipped for these. A link to a workspace
+  other than your token's opens with a warning (|shortcut-workspaces|). A
+  link ending in `#activity-<comment id>` puts the cursor on that comment.
+  (This is assumed to be the web app's format for comment links; it has not
+  been confirmed. Any other fragment is ignored and opens the story.)
+                                                             *shortcut-sc-ids*
+- `:e sc-<id>`: looked up as a story, then as an epic (stories and epics share
+  one ID space, so an ID is never both); the answer is remembered. Turn this
+  off with |shortcut-config.sc_ids|. Names that merely start with
+  `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
+  `notes/sc-42`), and files that exist on disk open as normal files.
+                                                                 *shortcut-gf*
+- |gf| on a Shortcut link or on `sc-<id>` (the latter unless
+  |shortcut-config.sc_ids| is `false`). For `sc-<id>` this works through
+  'includeexpr', which the plugin sets globally when it is empty, and chains
+  onto the `gitcommit` filetype plugin's own. Other filetypes that set their
+  own (e.g. `lua`, `python`) can opt in from `after/ftplugin/<filetype>.lua`;
+  the original expression still handles every other name: >lua
+    require('shortcut').chain_includeexpr()
+<
+==============================================================================
+7. STORY BUFFERS                    *shortcut-buffers* *shortcut-story-buffer*
+
+Stories, epics, drafts and comments are buffers with `shortcut://` names: see
+|shortcut-story-buffer| (here), |shortcut-editing|, |shortcut-create|,
+|shortcut-comment-float| and |shortcut-epic-buffer|.
+
+A story opens as a Markdown buffer (filetype `markdown`; both Neovim's
+Markdown syntax and its treesitter highlighting show the header as YAML):
+>markdown
+    ---
+    id: 12345
+    type: feature
+    state: In Progress
+    owners: [someone, someone-else]
+    epic: 678 Some epic
+    iteration: Sprint 42
+    estimate: 3
+    labels: [backend, security]
+    url: https://app.shortcut.com/<workspace>/story/12345
+    ---
+    # Story title
+
+    Description...
+
+    <!-- shortcut:tasks -->
+    ## Tasks
+    - [x] Done task · @someone
+    - [ ] Open task
+    - [ ] Shared task · @someone @someone-else
+
+    <!-- shortcut:comments (read-only) -->
+    ## Comments
+    **@someone** · 2026-10-01 14:03
+    > Comment body...
+    >
+    > **@someone-else** · 2026-10-01 15:20
+    > > A reply...
+
+    **@someone-else** · 2026-10-02 09:12
+    > Attachment: [screenshot.png](https://...) · image/png · 1.2 MB
+    >
+    > File description...
+<
+                                                       *shortcut-story-header*
+The header has, in this order: `id`; `type` (`feature`, `bug` or `chore`);
+`state` (the workflow state's name); `owners` (mention names); `epic` (`<id>
+<name>`); `iteration` (its name); `estimate`; `labels` (names); `url` (the
+story's link in the web app). `epic`, `iteration` and `estimate` are empty
+when the story has none. Mentions are written without `@` (a plain YAML value
+cannot start with one), but a leading `@` is accepted when reading. Values
+YAML would misread (e.g. a label named `true`, or containing `: `) are
+double-quoted.
+
+Names come from the lookup lists (|shortcut-cache|). An ID that can't be
+resolved (e.g. a member who left the workspace, or a list that couldn't be
+fetched) is shown as `unknown-<id>`. The epic's name is fetched with the
+story; if that fails the line reads `<id> (name unavailable)`.
+
+Then come the title, `# <title>`, and the description as written in Shortcut.
+
+                                                              *shortcut-tasks*
+Tasks are listed in Shortcut's order. The section is always there, even when
+empty.
+                                                        *shortcut-task-owners*
+A task's owners follow its description: the last ` · ` followed only by
+`@mention`s holds the owners, and everything before it is the description.
+The one ambiguity is a description that itself ends in ` · @name`: it is
+shown with a backslash before that dot (`Email team \· @name`), so it is never
+read as owners, and a backslash right before a `·` in a description is shown
+doubled. Hide owners with |shortcut-config.tasks.show_owners|.
+
+                                                           *shortcut-comments*
+Comments are read-only: oldest first, each with its author and local time,
+the body quoted; replies are nested one quote level deeper under the comment
+they answer. Deleted comments are left out (a deleted comment with replies
+shows as `*(deleted comment)*`).
+
+                                                              *shortcut-files*
+Files uploaded to the story are shown among the comments, by upload time (as
+in the web app). Each shows who uploaded it and when, then `Attachment:` with
+the file's name, content type and size, and its description (if any) quoted
+below. The name links to the file only if its URL is `https://` with a host
+and no `user@` part, without spaces, control characters or characters that
+would break the link; otherwise it is plain text. Names, types and the author
+and date of comment and file headers are escaped, so they can't add links or
+images of their own. In those, and in file descriptions, control characters
+(except tabs), line separators and bidirectional-formatting characters are
+shown as `�` (comment text is shown as written). Files and thumbnails are
+never downloaded, in buffers or in picker previews: only the link is shown.
+Like comments, file entries are read-only.
+
+                                                    *shortcut-section-markers*
+The `<!-- shortcut:... -->` lines mark where the sections start, so that a
+description containing its own `## Tasks` heading is not confused with the
+tasks. Leave them in place: without the tasks marker, tasks can't be told
+apart from the description, and the save is refused. If a description itself
+contains such a line, the last comments marker and the last tasks marker
+before it are the real ones.
+
+                                                          *shortcut-modelines*
+Modelines are disabled in story, epic, draft and comment buffers, so text from
+the server can never set options.
+
+`:e!` fetches the story again, discarding your edits.
+
+==============================================================================
+8. EDITING STORIES                                          *shortcut-editing*
+
+                                                               *shortcut-save*
+Edit the buffer and `:w` to save the changes to Shortcut. Only what you
+changed is sent: one `PUT /stories/<id>` with the changed fields, then one
+request per added, changed or deleted task. The story is then reloaded (the
+cursor stays on the same line) and the buffer is unmodified. While a save
+runs the buffer is read-only.
+
+In the buffer          Saved as ~
+`# <title>`            the story's name (required)
+description            the text between the title and the tasks marker, as
+                       written, without trailing blank lines
+`type`                 `feature`, `bug` or `chore`
+`state`                a state of the story's own workflow, by name (case is
+                       ignored)
+`owners`               mention names (case is ignored, `@` is optional);
+                       disabled members can't be added
+`epic`                 the epic ID at the start of the value (the name after
+                       it is ignored); empty removes the epic
+`iteration`            an iteration name or ID; empty removes it
+`estimate`             a non-negative integer; empty removes it
+`labels`               names of existing labels (case is ignored); an unknown
+                       name is an error, never a new label
+task lines             see |shortcut-task-editing|
+
+`id` and `url` are read-only: changing them is an error. Comments are
+read-only: edits below the comments marker are never sent, and `:w` puts them
+back as they were (with the reload after a save, or, when nothing else
+changed, by restoring that section; |u| brings your text back).
+
+                                                         *shortcut-validation*
+Every value is checked before anything is sent. Problems (an unknown state,
+member, label or iteration, an epic that doesn't exist, a malformed line...)
+are shown as diagnostics on their lines, with one summary message, and nothing
+is sent until they are fixed. Names are checked against the lookup lists
+(|shortcut-cache|); if something was added recently, run |:Shortcut-refresh|.
+An `unknown-<id>` left as it is never counts as a change.
+
+An unchanged buffer sends nothing (`:w` says "no changes"). So does a value
+written differently but meaning the same (other case, extra spaces, owners in
+another order).
+
+                                                       *shortcut-task-editing*
+Tasks are the `- [ ] description` lines in the tasks section. Toggle
+`[ ]`/`[x]`, edit the text, add lines (new tasks are added at the end of the
+list), or delete lines. Owners are the trailing ` · @mention @mention` part:
+add, change or remove it (removing it removes the owners). Unknown or disabled
+members are errors on that line. To end a description with a literal
+` · @name`, write the dot as `\·` (`\\·` for a backslash followed by a dot).
+Reordering tasks is not saved. Blank lines are fine in the section; any other
+line is an error.
+
+Tasks are matched to lines by invisible marks, so editing a line in place
+(`cc`, `:s`, `:move`, inserting text) keeps it the same task. A line that
+loses its mark because it was deleted and put back (`dd` then `p`) or replaced
+(as plugins that toggle checkboxes may do) is matched by its text: a replaced
+line to the task whose line it replaced, if the description is the same (the
+checkbox and owners may differ), and a moved line to the only task left that
+reads exactly the same (checkbox and owners included). Anything else, such as
+deleting a task and typing a similar line elsewhere, is a deleted task plus a
+new one, and the delete question asks. A copy (`yyp`) is a new task.
+
+                                                       *shortcut-delete-tasks*
+Deleting tasks asks first (unless |shortcut-config.tasks.confirm_delete| is
+`false`), listing them: "Delete" saves everything; "Keep tasks" saves
+everything else and the tasks come back with the reload; "Cancel save" (also
+<Esc>) sends nothing and keeps your edits. `:w!` does not skip this question.
+
+                                                          *shortcut-conflicts*
+If someone else changed the story since it was loaded, the save is refused and
+nothing is sent. |:Shortcut-diff| shows the version on Shortcut side by side
+with your buffer; then `:w!` saves your changes over theirs (only the fields
+you changed are sent), or `:e!` reloads theirs, discarding yours.
+
+                                                   *shortcut-partial-failures*
+If the story is saved but some task requests fail, the message lists what was
+saved and what failed, and the buffer keeps your edits; `:w` again sends only
+what failed. If someone else changed the story while it was being saved, that
+`:w` reports a conflict instead (so their change is never reverted silently);
+`:w!` then sends what failed, plus your values for anything they changed that
+you had edited too.
+
+If the changes are saved but reloading the story afterwards fails, the buffer
+stays modified and saving is refused until `:e!` reloads it (saving again
+could send the same changes twice).
+
+==============================================================================
+9. CREATING STORIES                                          *shortcut-create*
+
+                                                             *shortcut-drafts*
+|:Shortcut-create| opens a draft of a new story, `shortcut://story/new-<n>`
+(several drafts can be open at once), in Insert mode on the title line:
+>markdown
+    ---
+    type: feature
+    state: Backlog
+    owners: [you]
+    epic:
+    iteration:
+    estimate:
+    labels: []
+    ---
+    #
+
+    <!-- shortcut:tasks -->
+    ## Tasks
+<
+Fill it in like a story buffer (without `id`, `url` or comments) and `:w`:
+the story is created with every field and task, the window switches to its
+buffer (`shortcut://story/<id>`), and the draft is closed. Everything is
+checked exactly as when editing (|shortcut-validation|): problems are
+diagnostics, and nothing is sent until they are fixed. Labels must already
+exist, and task owners are the trailing ` · @mention` part.
+
+                                                    *shortcut-create-defaults*
+The template's defaults:
+
+- `owners`: you (the API token's member).
+- `state`: the first "unstarted" state of the workflow. The workflow is
+  |shortcut-config.create.workflow| (name or ID); otherwise the default
+  workflow of |shortcut-config.create.team|, if that team has one; otherwise
+  the workspace's default workflow. `state` must be a state of that workflow;
+  use `workflow=<name>` to start a draft in another one.
+- |shortcut-config.create.team| is assigned to the story (its team).
+- |shortcut-config.create.template|, if set, may change any field.
+- Arguments come last: >vim
+    :Shortcut create type=bug epic=678 state=In\ Progress owners=jdoe,alex
+        \ labels=backend iteration=Sprint\ 7 estimate=2 workflow=Engineering
+        \ team=platform
+<  Lists are comma-separated, an empty value (`epic=`) clears the field, and
+  spaces are escaped with `\`. <Tab> completes the keys and, once the lookup
+  lists are loaded, their values.
+
+                                                       *shortcut-create-write*
+Writing a draft:
+
+- Only writing the draft to its own name, in its own window, creates the story
+  (`:w`, `:w!`, `:wq`, `:x`, `:update`). Writing it anywhere else (`:w file`,
+  `:saveas file`, `:w shortcut://story/<id>`, `:1,2w file`) fails with an
+  error and sends nothing, and `:wq file` doesn't close it. So do `:wall`,
+  `:wqa` and `:xa` run from another window: the draft stays modified, so
+  `:wqa` and `:xa` don't exit.
+- The write waits for Shortcut's answer. CTRL-C stops waiting: before the
+  story is sent (while the lookup lists load or the epic is checked) nothing
+  is sent; once it is sent, it is still created and its buffer opens when it
+  is. If it fails, the draft stays open and modified with the error, so `:wq`
+  and `:x` don't close it. While the story is being created the draft is
+  read-only, writing it again sends nothing, and `:e!` keeps what is being
+  sent.
+                                                   *shortcut-uncertain-create*
+- Only a request refused before it was sent, or answered with a 4xx error,
+  certainly created nothing. Any other failure (no answer, a timeout, a server
+  error, a success answer without the story) may have created it: you are
+  told to check Shortcut, and from then on `:w` refuses to send the draft
+  again. Each resend needs its own `:w!`, until a story is created from it.
+- Otherwise a draft is an ordinary modified buffer: Neovim's usual rules keep
+  you from losing it by accident (|E37|, |E162|), `:q!` and `:bwipeout!`
+  discard it, and `:e!` puts the template back.
+- After creating a story, |:Shortcut-yank| copies its link.
+
+==============================================================================
+10. COMMENTS                                          *shortcut-comment-float*
+
+|:Shortcut-comment| opens a floating Markdown buffer titled
+`Comment on sc-<id>: <title>`. `:w` posts it and closes the float (`:wq` works
+too); `:q!` discards it. Empty comments are not posted. If posting fails, the
+text stays in the buffer. Afterwards the story's buffer, if open, is reloaded
+to show the comment, unless it has unsaved changes.
+
+Only writing the float to its own name posts (`:w`, `:w!`, `:wq`, `:x`,
+`:update`). Writing it anywhere else (`:w file`, `:wq file`, `:saveas file`,
+`:1,2w file`, `:w >> file`) fails with an error message, and `:wq file`
+doesn't close the float: nothing is posted and no file is written. `:wall`,
+`:wqa` and `:xa` run from another window don't post the draft either: it
+stays modified, so `:wqa` and `:xa` don't exit. Run in the float itself, they
+post it (like `:w`), and `:wqa`/`:xa` wait for the answer (up to 10 seconds):
+if posting fails or takes longer, Neovim doesn't exit and the text stays.
+
+                                                    *shortcut-unsent-comments*
+If Neovim exits anyway with a comment still being posted (`:w` then `:qa`), it
+waits for the answer (up to 15 seconds); a comment that could not be posted,
+or whose answer didn't come (it may still have been posted), is saved under
+`stdpath('state')/shortcut/unsent/` and the path is printed.
+
+==============================================================================
+11. EPIC BUFFERS                                        *shortcut-epic-buffer*
+
+An epic opens as a Markdown buffer listing its stories, grouped by workflow
+state. Epics can't be saved from Neovim (see the end of this section):
+>markdown
+    ---
+    id: 678
+    state: In Progress
+    owners: [someone]
+    teams: [Platform]
+    labels: [q4]
+    planned_start: 2026-10-01
+    deadline: 2026-12-15
+    stories: 14 (6 done, 5 started, 3 unstarted)
+    url: https://app.shortcut.com/<workspace>/epic/678
+    ---
+    # Epic name
+
+    Description...
+
+    <!-- shortcut:stories -->
+    ## Stories
+
+    ### In Progress
+    - sc-12345 Story title · someone · 3pt
+    - sc-12346 Another story · unowned
+
+    ### Done
+    - sc-12347 Finished story · someone, someone-else · 1pt
+<
+- The header has, in this order: `id`; `state` (the epic state's name);
+  `owners`; `teams`; `labels`; `planned_start` and `deadline` (dates, empty
+  when not set); `stories`, how many stories and how many are done, started
+  and unstarted (and, when there are any, in backlog states, in states of
+  other types, and in states that can't be looked up; an empty epic shows
+  just `0`); `url`. Names and `unknown-<id>` work as in story buffers.
+- Stories are grouped under `### <state name>`, ordered by state type
+  (backlog, unstarted, started, then done), then by the state's position in
+  its workflow; states with the same name (from several workflows) share one
+  group. States of other types come after those, and stories in a state that
+  can't be looked up come last, under `### unknown-<id>`. Within a group,
+  stories are in Shortcut's order. Archived stories are left out.
+                                                            *shortcut-epic-CR*
+- <CR> on a line containing `sc-<id>` opens it in the current window (the
+  `sc-<id>` under the cursor, else the first on the line). On any other line
+  <CR> does what it did before: the <CR> mapping it replaced (buffer-local,
+  e.g. from a Markdown plugin, or global), else Neovim's own <CR>. |gf| on
+  `sc-<id>` works too, as everywhere.
+- `:e!` fetches the epic and its stories again. Saving is not available:
+  the buffer can be edited (e.g. to jot notes or copy lines), but `:w` says
+  it can't be saved, sends nothing, and keeps your changes in the buffer;
+  `:e!` discards them.
+
+==============================================================================
+12. PICKERS                                                 *shortcut-pickers*
+
+|:Shortcut-search|, |:Shortcut-mine| and |:Shortcut-epics| list stories or
+epics. Results arrive a page at a time (|shortcut-config.picker.page_size| per
+request), up to |shortcut-config.picker.max_results| (the API stops at 1000).
+Choosing one opens its buffer.
+
+                                                      *shortcut-search-syntax*
+Queries use Shortcut's search operators, as in the web app
+(https://www.shortcut.com/help/fields-and-features/search-operators), e.g.
+`owner:someone state:"In Progress" epic:123 type:bug`. Operators combine with
+AND, and `!` or `-` in front of one negates it (`!is:done`). Shortcut rejects
+an empty search, so with no query nothing is shown until you type one.
+
+                                                      *shortcut-picker-snacks*
+With snacks.nvim, every change to the query searches again (the request in
+flight is cancelled). Each row shows `sc-<id>`, the workflow state (coloured
+by its type: backlog, unstarted, started, done; states of other types are not
+coloured), the story type (`feat`, `bug`, `chore`), the title, and the owners
+(dimmed). Epic rows show the ID, state and name.
+
+                                                           *shortcut-previews*
+The preview shows the story or epic as its buffer would, with modelines off.
+It is fetched once the cursor has rested on a row for 300 ms, so moving
+through the list doesn't fetch every row, and at most 40 previews are fetched
+per minute (past that the preview says it is waiting), well within the API's
+limit of 200 requests per minute. Previews are cached for 5 minutes; any
+change made from Neovim (saving a buffer, |:Shortcut-state|, a comment...),
+|:Shortcut-refresh|, or loading the object's buffer drops them sooner.
+
+                                                        *shortcut-picker-keys*
+Key                   Action ~
+<CR>                  Open the story or epic in the current window; with
+                      several selected (<Tab>), open each
+<C-s> <C-v> <C-t>     Open in a split, vertical split, new tab (snacks'
+                      defaults)
+<C-y> (input), y (list)
+                      Copy the web link, like |:Shortcut-yank|
+<A-b>                 Open the web link in the browser (|vim.ui.open()|)
+
+These follow snacks' own GitHub pickers, which use the same keys to copy and
+browse. Every other snacks key works as usual (<C-g> toggles live search off
+to filter the results locally). The web link is the result's own link only if
+it is a Shortcut web app link to that same story or epic; otherwise it is
+built from your workspace.
+
+The pickers are snacks sources named `shortcut_search`, `shortcut_mine` and
+`shortcut_epics`. Settings under `picker.sources.<name>` in your snacks
+configuration apply on top of the plugin's, e.g. to change keys or the
+layout: >lua
+    require('snacks').setup({
+      picker = {
+        sources = {
+          shortcut_search = {
+            layout = 'vertical',
+            win = { list = { keys = { ['<c-o>'] = 'shortcut_browse' } } },
+          },
+        },
+      },
+    })
+<
+The actions are `shortcut_copy_url` and `shortcut_browse`.
+
+                                                    *shortcut-picker-fallback*
+Without snacks.nvim the commands still work, without live search or previews
+(an info message says so once per session): |vim.ui.input()| asks for the
+query if none was given (not for `mine`; for `epics` it suggests the
+default), the first results (up to |shortcut-config.picker.max_results|) are
+fetched, and |vim.ui.select()| lists them as `sc-<id> [state] title`.
+
+==============================================================================
+13. LOOKUP-LIST CACHE                                         *shortcut-cache*
+
+Stories and epics refer to workflow states, members, labels, teams and
+iterations by ID. To show names (and turn names back into IDs when you edit),
+shortcut.nvim fetches these lists once and caches them, in memory and in
+`stdpath('cache')/shortcut/<workspace>/refs.json` (e.g.
+`~/.cache/nvim/shortcut/<workspace>/refs.json`). Each workspace has its own
+file, so switching tokens never mixes them up. The file is readable only by
+you (it contains member names, but not the token or email addresses).
+
+After |shortcut-config.cache.ttl| seconds a list is fetched again in the
+background while the old copy keeps being used (stale-while-revalidate), so
+working offline never makes you wait; a failed fetch is retried after a
+minute. |:Shortcut-refresh| fetches everything again now (e.g. after adding a
+label). |:checkhealth| shows how old each list is.
+
+==============================================================================
+14. HIGHLIGHTS                                           *shortcut-highlights*
+
+The picker rows use these highlight groups. Each is defined as a default link
+(|:highlight-default|), so a colour scheme or your config can change it; they
+are defined again after |:colorscheme|.
+
+Group                     Default ~
+*hl-ShortcutId*             links to `Number`: `sc-<id>`
+*hl-ShortcutStateBacklog*   links to `DiagnosticHint`: backlog states
+*hl-ShortcutStateUnstarted* links to `DiagnosticInfo`: unstarted states
+*hl-ShortcutStateStarted*   links to `DiagnosticWarn`: started states
+*hl-ShortcutStateDone*      links to `DiagnosticOk`: done states
+*hl-ShortcutStateOther*     no attributes: states of other types
+*hl-ShortcutTypeFeature*    links to `Function`: `feat`
+*hl-ShortcutTypeBug*        links to `DiagnosticError`: `bug`
+*hl-ShortcutTypeChore*      links to `Constant`: `chore`
+*hl-ShortcutOwners*         links to `Comment`: owners
+
+Buffers are highlighted as Markdown; problems found when saving are shown as
+|vim.diagnostic| diagnostics.
+
+==============================================================================
+15. LUA API                                                     *shortcut-lua*
+
+`require('shortcut').setup({opts})`
+    See |shortcut.setup()|.
+
+                                                *shortcut.chain_includeexpr()*
+`require('shortcut').chain_includeexpr({buf})`
+    Make |gf| on `sc-<id>` work in buffer {buf} (default: the current one)
+    whose filetype sets its own 'includeexpr'. The original expression still
+    handles every other name. Done automatically for `gitcommit` buffers.
+
+                                                      *shortcut.includeexpr()*
+`require('shortcut').includeexpr({fname}, {fallback})`
+    An 'includeexpr' function: maps `sc-<id>` to a name `gf` can open, and
+    passes other names to {fallback} (a Vimscript expression or a Lua
+    function), or returns them unchanged.
+
+==============================================================================
+16. TROUBLESHOOTING                                 *shortcut-troubleshooting*
+
+                                                             *shortcut-health*
+Run `:checkhealth shortcut`. It reports the Neovim and `curl` versions; where
+the token comes from (only its last four characters are shown) and whether it
+works (by asking the API who you are); what the lookup-list cache holds and
+how old each list is; whether `:e sc-<id>` is handled, whether Neovim's
+built-in `https://` handler skips Shortcut links, and whether `gf` works on
+`sc-<id>`; and whether snacks.nvim and `git` are installed.
+
+Every error is a notification prefixed with `shortcut.nvim:`; none should
+come with a Lua stack trace. If one does, please report it.
+
+                                                        *shortcut-rate-limits*
+Shortcut allows about 200 API requests per minute. A request answered with
+HTTP 429 (too many requests) is retried up to three times, waiting as long as
+the answer asks (at most a minute) or 1, 2 and 4 seconds; after that the
+command fails with "rate limited". Wait a minute and try again. Picker
+previews are limited to 40 per minute (|shortcut-previews|), and the lookup
+lists are cached (|shortcut-cache|), so normal use stays well below the limit.
+
+                                                         *shortcut-workspaces*
+Your token belongs to one workspace. A link to another workspace opens with a
+warning, and the story is usually "not found": stories in another workspace
+can't be read with your token. Use a token for that workspace
+(|shortcut-auth|).
+
+                                                         *shortcut-sc-ids-off*
+If `:e sc-<id>` gets in your way (e.g. you edit files named `sc-123` in the
+current directory without a path: those that exist on disk open as files
+anyway), turn it off with `sc_ids = false` (|shortcut-config.sc_ids|). That
+also turns off |gf| on `sc-<id>`; `:Shortcut story sc-123` and links still
+work.
+
+                                                        *shortcut-net-handler*
+Neovim 0.12 downloads `http://` and `https://` names given to `:edit` in the
+background (the `nvim.net.remotefile` autocommands), which would replace a
+story with the web app's login page. shortcut.nvim wraps those handlers at
+startup so they skip Shortcut story and epic links, and leaves every other
+link to them. If you turned that plugin off (`g:loaded_nvim_net_plugin`),
+there is nothing to wrap. |shortcut-health| reports the state.
+
+ vim:tw=78:ts=8:sw=4:et:ft=help:norl:

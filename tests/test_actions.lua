@@ -210,13 +210,16 @@ T['comment']['writing it anywhere else posts nothing and writes no file'] = func
     '1write ' .. file,
     '1,1write!',
     'write !cat > /dev/null',
-    -- The refusal is an error, so the quit doesn't go ahead and lose the draft.
+    -- The write fails, so the quit doesn't go ahead and lose the draft.
     'wq ' .. file,
     'xit ' .. file,
     '1,1wq ' .. file,
   }) do
     child.lua('_G.messages = {}')
-    local ok, err = pcall(child.cmd, cmd)
+    -- A message, not a Lua error (which would come with a stack trace).
+    expect.no_error(function()
+      child.cmd(cmd)
+    end)
     child.lua('vim.wait(50)')
     eq({ cmd = cmd, writes = writes() }, { cmd = cmd, writes = {} })
     eq(child.lua_get('vim.uv.fs_stat(...) == nil', { file }), true)
@@ -224,18 +227,64 @@ T['comment']['writing it anywhere else posts nothing and writes no file'] = func
     eq(child.lua_get('vim.api.nvim_win_get_config(0).relative'), 'editor')
     eq(child.api.nvim_buf_get_lines(0, 0, -1, false), { 'draft', 'two' })
     eq(child.bo.modified, true)
-    eq(messages(), {})
-    if not vim.startswith(cmd, 'write !') then
-      eq({ cmd = cmd, ok = ok }, { cmd = cmd, ok = false })
-      expect.no_error(function()
-        assert(tostring(err):find('cannot write the comment to ', 1, true), cmd)
-      end)
+    if vim.startswith(cmd, 'write !') then
+      eq(messages(), {})
+    else
+      local msgs = messages()
+      eq(
+        { cmd = cmd, n = #msgs, level = msgs[1] and msgs[1].level },
+        { cmd = cmd, n = 1, level = 4 }
+      )
+      eq(vim.startswith(msgs[1].msg, 'shortcut.nvim: cannot write the comment to '), true)
     end
+    -- 'cpoptions' is as it was.
+    eq(child.o.cpoptions, child.lua_get('vim.go.cpoptions'))
+    eq(child.o.cpoptions:find('+', 1, true), nil)
   end
   -- And `:w` still posts.
   child.cmd('write')
   wait_messages(1)
   eq(#writes(), 1)
+end
+
+T['comment']['typed :wq file shows the refusal without a stack trace and keeps the float'] = function()
+  -- With Neovim's own vim.notify.
+  child.restart({ '-u', 'tests/minimal_init.lua' })
+  child.lua(
+    [[
+    vim.env.SHORTCUT_API_TOKEN = ...
+    dofile(vim.fn.getcwd() .. '/tests/fake_transport.lua')
+    _G.routes = function() return { status = 404, body = '{}' } end
+    require('shortcut.buffer.comment').open(301, { lines = { 'draft' } })
+  ]],
+    { TOKEN }
+  )
+  child.cmd('stopinsert')
+  local file = child.fn.tempname()
+  -- Typed, as a user would: an error in the write handler would not stop this `:wq`.
+  -- `type_keys()` raises when typing showed an error message: only the refusal, not a Lua error.
+  local ok, err = pcall(child.type_keys, ':wq ' .. file .. '<CR>')
+  if not ok then
+    eq(vim.startswith(tostring(err), 'shortcut.nvim: cannot write the comment to '), true)
+    eq(tostring(err):find('traceback', 1, true), nil)
+  end
+  -- Not `child.lua('vim.wait()')`: the message must be shown from the main loop, as it is to a
+  -- user, not inside an API call (where an error message is raised as an error).
+  local shown = ''
+  for _ = 1, 200 do
+    shown = child.cmd_capture('messages')
+    if shown ~= '' then
+      break
+    end
+    vim.uv.sleep(5)
+  end
+  eq(child.api.nvim_buf_get_name(0), 'shortcut://story/301/comment')
+  eq(child.lua_get('vim.api.nvim_win_get_config(0).relative'), 'editor')
+  eq(child.api.nvim_buf_get_lines(0, 0, -1, false), { 'draft' })
+  eq(child.fn.filereadable(file), 0)
+  eq(shown:find('cannot write the comment to', 1, true) ~= nil, true)
+  eq(shown:find('traceback', 1, true), nil)
+  eq(shown:find('Autocommands', 1, true), nil)
 end
 
 T['comment'][':w!, :x and :update each post once'] = function()

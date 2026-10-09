@@ -27,6 +27,8 @@ jobs:
   test:
     name: test (${{ matrix.os }}, nvim ${{ matrix.nvim }})
     runs-on: ${{ matrix.os }}
+    # The suite takes well under a minute; never let a stuck Neovim hold a runner for hours.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

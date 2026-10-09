@@ -89,6 +89,41 @@ T['names the short config file as the source'] = function()
   has(report, 'saved identity: @jdoe in workspace acme')
 end
 
+T['reports the routing of links and sc-<id>'] = function()
+  local report = checkhealth()
+  has(report, '`:e sc-<id>` opens stories and epics (sc_ids = true)')
+  has(report, "`gf` on sc-<id> works in buffers without their own 'includeexpr'")
+  if child.lua_get('vim.g.loaded_nvim_net_plugin') ~= vim.NIL then
+    has(report, "Neovim's built-in https:// handler skips Shortcut story and epic links")
+  end
+  has(report, 'the current story can come from the git branch')
+
+  child.lua([[vim.go.includeexpr = 'MyExpr()']])
+  has(checkhealth(), "the global 'includeexpr' is set elsewhere (MyExpr())")
+
+  child.lua([[require('shortcut').setup({ sc_ids = false })]])
+  report = checkhealth()
+  has(report, '`:e sc-<id>` is turned off (sc_ids = false)')
+  has(report, '`gf` on sc-<id> is turned off too (sc_ids = false)')
+  eq(report:find('`gf` on sc-<id> works', 1, true), nil)
+  eq(report:find("'includeexpr' is set elsewhere", 1, true), nil)
+end
+
+T['warns about an unguarded built-in https:// handler'] = function()
+  child.lua([[
+    vim.api.nvim_create_autocmd('BufReadCmd', {
+      group = vim.api.nvim_create_augroup('nvim.net.remotefile', { clear = true }),
+      pattern = 'https://*',
+      callback = function() end,
+    })
+  ]])
+  has(checkhealth(), 'would download Shortcut links as web pages')
+  child.lua([[require('shortcut.buffer.handlers').guard_net_plugin()]])
+  has(checkhealth(), "Neovim's built-in https:// handler skips Shortcut story and epic links")
+  child.lua([[vim.api.nvim_del_augroup_by_name('nvim.net.remotefile')]])
+  has(checkhealth(), "Neovim's built-in https:// handler is not loaded")
+end
+
 T['finds snacks.nvim on the runtimepath'] = function()
   local dir = child.lua_get('vim.fn.tempname()')
   child.lua(

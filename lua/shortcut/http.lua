@@ -356,7 +356,7 @@ local REASONS = {
   [404] = 'not found',
   [409] = 'conflict',
   [422] = 'unprocessable request',
-  [429] = 'rate limited: too many requests',
+  [429] = 'rate limited: too many requests (Shortcut allows about 200 a minute); try again shortly',
 }
 
 ---@param status integer
@@ -377,9 +377,9 @@ local function http_error_message(status, body)
       end
     end
   end
-  if status == 401 then
-    -- The body for an invalid token is not helpful on its own.
-    message = message and (REASONS[401] .. ' (' .. message .. ')') or REASONS[401]
+  if status == 401 or status == 429 then
+    -- The body for an invalid token or the rate limit is not helpful on its own.
+    message = message and (REASONS[status] .. ' (' .. message .. ')') or REASONS[status]
   end
   message = message or REASONS[status] or (status >= 500 and 'server error') or 'request failed'
   return message, details

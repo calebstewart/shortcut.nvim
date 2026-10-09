@@ -791,14 +791,40 @@ T[':w']['writing elsewhere is refused and sends nothing'] = function()
     'write shortcut://story/301',
     'wq ' .. file,
   }) do
-    local ok, err = pcall(child.cmd, cmd)
-    eq({ cmd, ok }, { cmd, false })
-    eq(err:find('cannot write the draft to', 1, true) ~= nil, true)
+    child.lua('_G.messages = {}')
+    -- A message, not a Lua error (which would come with a stack trace).
+    expect.no_error(function()
+      child.cmd(cmd)
+    end)
+    child.lua('vim.wait(20)')
+    eq(#child.lua_get('_G.messages'), 1)
+    eq(last_message().level, ERROR)
+    eq(vim.startswith(last_message().msg, 'shortcut.nvim: cannot write the draft to '), true)
     eq(child.api.nvim_buf_get_name(0), 'shortcut://story/new-1')
+    eq(child.bo.modified, true)
   end
+  eq(child.o.cpoptions:find('+', 1, true), nil)
   eq(writes(), {})
   eq(child.fn.filereadable(file), 0)
   eq(#child.api.nvim_list_wins(), 1)
+end
+
+T[':w']['typed :wq file is refused without a stack trace and keeps the window'] = function()
+  open()
+  child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+  child.cmd('split')
+  local file = child.fn.tempname() .. '.md'
+  -- Typed, as a user would: an error in the write handler would not stop this `:wq`.
+  child.type_keys(':wq ' .. file .. '<CR>')
+  child.lua('vim.wait(20)')
+  eq(#child.api.nvim_list_wins(), 2)
+  eq(child.api.nvim_buf_get_name(0), 'shortcut://story/new-1')
+  eq(child.bo.modified, true)
+  eq(child.fn.filereadable(file), 0)
+  eq(writes(), {})
+  eq(#messages(), 1)
+  eq(vim.startswith(last_message().msg, 'shortcut.nvim: cannot write the draft to '), true)
+  eq(child.cmd_capture('messages'), '')
 end
 
 T[':w'][':wall from another window is refused'] = function()

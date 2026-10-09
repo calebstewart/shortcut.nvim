@@ -6,8 +6,16 @@ Neovim. Stories and epics open as Markdown buffers — `:e` a story URL or `sc-1
 [`short` CLI](https://github.com/shortcut-cli/shortcut-cli), so if you already use it there is
 nothing to set up.
 
-> [!WARNING]
-> Early development. Most of the functionality described here is not implemented yet.
+<!-- TODO: a short GIF of the search picker -> story buffer -> :w flow. -->
+
+- Search stories and epics with live results and previews ([snacks.nvim](https://github.com/folke/snacks.nvim)),
+  or with `vim.ui.select` without it.
+- Open stories and epics as Markdown buffers by ID, `sc-<id>`, a web app link or `gf`.
+- Edit the title, description, state, owners, epic, iteration, estimate, labels and tasks, and
+  save with `:w`; conflicting changes are never overwritten silently.
+- Create stories from a template, comment, move a story to another state, open or copy its link.
+
+The full documentation is also in Neovim: `:help shortcut`.
 
 ## Requirements
 
@@ -31,20 +39,46 @@ nothing to set up.
 
 `setup()` is optional; without it the defaults apply.
 
+Don't lazy-load it on the `:Shortcut` command alone: the plugin also opens Shortcut links,
+`sc-<id>` names and `shortcut://` buffers given to `:edit` or on the command line, which only
+works if it is loaded at startup. Loading it costs well under a millisecond (the plugin file
+only registers the command and a few autocommands; everything else is loaded on first use).
+
+### Neovim packages
+
+Without a plugin manager, clone it into a `pack/*/start` directory (or `pack/*/opt`, then
+`:packadd shortcut.nvim`):
+
+```sh
+git clone https://github.com/calebstewart/shortcut.nvim \
+  ~/.local/share/nvim/site/pack/plugins/start/shortcut.nvim
+```
+
 ### Nix
 
-The flake provides the plugin as a package and through an overlay:
+The flake provides the plugin as a package (`packages.<system>.default`) and, through
+`overlays.default`, as `pkgs.vimPlugins.shortcut-nvim`:
 
 ```nix
+# flake.nix
 {
   inputs.shortcut-nvim.url = "github:calebstewart/shortcut.nvim";
+  # ...
+}
 
-  # nixpkgs.overlays = [ inputs.shortcut-nvim.overlays.default ];
-  # programs.neovim.plugins = [ pkgs.vimPlugins.shortcut-nvim ];  # home-manager
+# In your NixOS or home-manager configuration:
+{ inputs, pkgs, ... }:
+{
+  nixpkgs.overlays = [ inputs.shortcut-nvim.overlays.default ];
+
+  # home-manager
+  programs.neovim.plugins = [ pkgs.vimPlugins.shortcut-nvim ];
 }
 ```
 
-Try it without installing anything (uses an isolated config, not yours):
+The package declares `curl` and `git` as runtime dependencies, which Neovim wrappers put on
+`PATH`. Try it without installing anything (in an isolated configuration with snacks.nvim, not
+yours):
 
 ```sh
 nix run github:calebstewart/shortcut.nvim
@@ -74,6 +108,24 @@ require('shortcut').setup({
 })
 ```
 
+| Option | Default | Description |
+|---|---|---|
+| `token` | `nil` | API token, or a function returning one (see [Authentication](#authentication)). Takes precedence over the environment and the `short` config |
+| `cli_config_path` | `nil` | The `short` config file to read the token from and that `:Shortcut login` writes; by default the one `short` uses |
+| `cache.ttl` | `86400` | Seconds before a [lookup list](#lookup-list-cache) is fetched again (in the background) |
+| `sc_ids` | `true` | Whether `:e sc-<id>` and `gf` on `sc-<id>` open the story or epic (links work either way) |
+| `picker.page_size` | `25` | Results per search request (1 to 250) |
+| `picker.max_results` | `200` | Most results a picker loads (the API stops at 1000) |
+| `http.timeout` | `30` | Seconds a request may take |
+| `tasks.show_owners` | `true` | Show task owners as a trailing ` · @mention`; when `false`, owners are neither shown nor changed |
+| `tasks.confirm_delete` | `true` | Ask before a save deletes tasks |
+| `create.workflow` | `nil` | Workflow (name or ID) of new stories; default: `create.team`'s default workflow, else the workspace's |
+| `create.team` | `nil` | Team (name, mention name or ID) new stories are assigned to |
+| `create.template` | `nil` | `fun(fields): fields?` customizing the `:Shortcut create` template |
+
+`setup()` may be called again; each call starts from the defaults. Invalid options are reported
+and leave the previous configuration in place; unknown options only produce a warning.
+
 ## Authentication
 
 shortcut.nvim needs a Shortcut API token (create one under
@@ -84,12 +136,34 @@ places, in order, and uses the first token it finds:
    per Neovim session, so it can fetch the token from a password manager:
 
    ```lua
+   --- The first line a command prints, or an error if it fails (rather than its error message
+   --- being used as the token).
+   local function command_token(cmd)
+     local res = vim.system(cmd, { text = true }):wait()
+     if res.code ~= 0 then
+       error(('%s failed: %s'):format(cmd[1], vim.trim(res.stderr or '')))
+     end
+     return vim.trim(vim.split(res.stdout or '', '\n')[1])
+   end
+
    require('shortcut').setup({
      token = function()
-       return vim.trim(vim.fn.system({ 'pass', 'show', 'shortcut/api-token' }))
+       return command_token({ 'pass', 'show', 'shortcut/api-token' })
      end,
    })
    ```
+
+   For other password managers, change the command:
+
+   ```lua
+   -- macOS Keychain
+   { 'security', 'find-generic-password', '-s', 'shortcut-api-token', '-w' }
+   -- 1Password CLI
+   { 'op', 'read', 'op://Private/Shortcut/token' }
+   ```
+
+   If the function raises an error or returns anything but a non-empty string, commands say so
+   (without a stack trace) and send nothing.
 
 2. **The `SHORTCUT_API_TOKEN` environment variable** (or the older `CLUBHOUSE_API_TOKEN`).
 3. **The [`short` CLI](https://github.com/shortcut-cli/shortcut-cli)'s config file.** If you
@@ -119,7 +193,9 @@ users could see it with `ps`.
 
 `:checkhealth shortcut` reports the Neovim and `curl` versions, where the token comes from (with
 only its last four characters shown), whether it works (by asking the API who you are), what the
-lookup-list cache holds (see below), and whether snacks.nvim is installed.
+lookup-list cache holds (see below), whether `:e sc-<id>` is handled, whether Neovim's built-in
+`https://` handler skips Shortcut links, whether `gf` works on `sc-<id>`, and whether
+snacks.nvim and `git` are installed.
 
 ### Lookup-list cache
 
@@ -255,10 +331,25 @@ require('snacks').setup({
 })
 ```
 
-The highlight groups are `ShortcutId`, `ShortcutStateBacklog`, `ShortcutStateUnstarted`,
-`ShortcutStateStarted`, `ShortcutStateDone`, `ShortcutStateOther`, `ShortcutTypeFeature`,
-`ShortcutTypeBug`, `ShortcutTypeChore` and `ShortcutOwners`; each links to a standard group
-unless you define it.
+The actions are `shortcut_copy_url` and `shortcut_browse`.
+
+#### Highlights
+
+The picker rows use these groups. Each is a default link (`:highlight default link`), so your
+colour scheme or config can change it:
+
+| Group | Default | Used for |
+|---|---|---|
+| `ShortcutId` | `Number` | `sc-<id>` |
+| `ShortcutStateBacklog` | `DiagnosticHint` | backlog states |
+| `ShortcutStateUnstarted` | `DiagnosticInfo` | unstarted states |
+| `ShortcutStateStarted` | `DiagnosticWarn` | started states |
+| `ShortcutStateDone` | `DiagnosticOk` | done states |
+| `ShortcutStateOther` | (no attributes) | states of other types |
+| `ShortcutTypeFeature` | `Function` | `feat` |
+| `ShortcutTypeBug` | `DiagnosticError` | `bug` |
+| `ShortcutTypeChore` | `Constant` | `chore` |
+| `ShortcutOwners` | `Comment` | owners |
 
 ### Without snacks.nvim
 
@@ -276,7 +367,7 @@ Other ways of naming it switch to that buffer:
   the web app. Neovim's built-in download of `https://` files is skipped for these. A link to a
   workspace other than your token's opens with a warning.
 - `:e sc-<id>`: looked up as a story, then as an epic (stories and epics share one ID space, so
-  an ID is never both). Turn this off with `sc_ids = false`. Names that merely start with
+  an ID is never both). Turn this off (and `gf` on `sc-<id>`) with `sc_ids = false`. Names that merely start with
   `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g. `notes/sc-42`), and files
   that exist on disk open as normal files.
 - `gf` on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through `'includeexpr'`,
@@ -367,7 +458,9 @@ Description…
   description itself contains such a line, the **last** comments marker and the last tasks
   marker before it are the real ones.
 - Modelines are disabled in these buffers, so text from the server can never set options.
-- A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
+- A link ending in `#activity-<comment id>` puts the cursor on that comment. (This is assumed to be
+  the web app's format for comment links; it has not been confirmed. Any other fragment is
+  ignored.)
 - `:e!` fetches the story again, discarding your edits.
 
 ### Editing stories
@@ -389,8 +482,10 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
 | `labels` | names of **existing** labels (case is ignored); an unknown name is an error, never a new label |
 | task lines | see below |
 
-- `id` and `url` are read-only: changing them is an error. Comments are read-only; edits below
-  the comments marker are ignored (and undone by the reload).
+- `id` and `url` are read-only: changing them is an error. Comments are read-only: edits below
+  the comments marker are never sent, and `:w` puts them back as they were (with the reload
+  after a save, or, when nothing else changed, by restoring that section; `u` brings your
+  text back).
 - Every value is checked before anything is sent. Problems (an unknown state, member, label or
   iteration, an epic that doesn't exist, a malformed line…) are shown as diagnostics on their
   lines, with one summary message, and **nothing** is sent until they are fixed. Names are
@@ -510,7 +605,8 @@ Writing a draft:
 
 ## Epic buffers
 
-An epic opens as a read-only Markdown buffer listing its stories, grouped by workflow state:
+An epic opens as a Markdown buffer listing its stories, grouped by workflow state. Epics can't
+be saved from Neovim (see the end of this section):
 
 ```markdown
 ---
@@ -562,8 +658,34 @@ Description…
   too, as everywhere.
 - Modelines are disabled, as in story buffers.
 - Epics have no file attachments to show: the API's `Epic` has no `files` (only stories do).
-- `:e!` fetches the epic and its stories again. Editing (`:w`) is not available: it reports
-  so and keeps your changes in the buffer.
+- `:e!` fetches the epic and its stories again. Saving is not available: the buffer can be
+  edited (e.g. to jot notes or copy lines), but `:w` says it can't be saved, sends nothing, and
+  keeps your changes in the buffer; `:e!` discards them.
+
+## Troubleshooting
+
+- **Start with `:checkhealth shortcut`** (see [Health check](#health-check)). Every error is a
+  notification prefixed with `shortcut.nvim:`; none should come with a Lua stack trace. If one
+  does, please report it.
+- **Rate limits.** Shortcut allows about 200 API requests per minute. A request answered with
+  HTTP 429 is retried up to three times, waiting as long as the answer asks (at most a minute)
+  or 1, 2 and 4 seconds; after that the command fails with "rate limited": wait a minute and
+  try again. Picker previews are limited to 40 a minute and the lookup lists are cached, so
+  normal use stays well below the limit.
+- **Links to another workspace.** Your token belongs to one workspace. A link to another
+  workspace opens with a warning, and the story is usually "not found", since your token can't
+  read it. Use a token for that workspace.
+- **`sc-<id>` gets in the way** (e.g. files named `sc-123` that you open without a path; those
+  that exist on disk open as files anyway): set `sc_ids = false`. That also turns off `gf` on
+  `sc-<id>`; `:Shortcut story sc-123` and links still work.
+- **Neovim's built-in `https://` handler.** Neovim 0.12 downloads `http(s)://` names given to
+  `:edit` in the background (the `nvim.net.remotefile` autocommands), which would replace a
+  story with the web app's login page. shortcut.nvim wraps those handlers at startup so they skip
+  Shortcut story and epic links, and leaves every other link to them; if you turned that plugin
+  off (`g:loaded_nvim_net_plugin`), there is nothing to wrap. `:checkhealth shortcut` shows the
+  state.
+- **A name, label or member is missing** after it was added in Shortcut: run
+  `:Shortcut refresh` to fetch the lookup lists again.
 
 ## Development
 
@@ -573,19 +695,36 @@ With Nix:
 nix run .#dev        # Neovim with the plugin loaded from this checkout (isolated config)
 nix develop          # neovim, stylua, lua-language-server, make, ...
 make test
+nix flake check      # the plugin package, the tests and the formatting, in the sandbox
 ```
 
-`nix run .#dev` reads the plugin straight from the working tree, so changes take effect on
-restart without rebuilding. (Plain `nix run .` uses the packaged plugin and, like every flake
-build, only sees files tracked by git.)
+`nix run .#dev` reads the plugin straight from the working tree (isolated with
+`NVIM_APPNAME=shortcut-nvim-dev`), so changes take effect on restart without rebuilding. Plain
+`nix run .` uses the packaged plugin and, like every flake build (and `nix flake check`), only
+sees files tracked by git: `git add` new files first.
 
 Without Nix:
 
 ```sh
-make test            # fetches mini.nvim and snacks.nvim (pinned; picker tests skip offline) into deps/
+make deps            # fetch mini.nvim and snacks.nvim (pinned) into deps/; `make test` does it too
+make test            # every test file, in parallel
 make test-file FILE=tests/test_config.lua
-make fmt             # requires stylua
+make fmt             # requires stylua (fmt-check to check only)
+make typecheck       # requires lua-language-server
 ```
+
+`make test` runs each test file in its own headless Neovim, one per CPU at a time (`JOBS=1` runs
+them one after another), prints a line per file, then the full report of any file that failed
+or skipped tests (`VERBOSE=1`: of every file). If snacks.nvim can't be fetched (e.g. offline),
+the picker tests are skipped, unless `REQUIRE_SNACKS=1` (as in CI). Tests never touch the
+network or your real `short` config and cache: they run against recorded API responses with a
+temporary `$HOME`.
+
+The help file, `doc/shortcut.txt`, is written by hand; `tests/test_doc.lua` checks that
+`:helptags` accepts it, that its links resolve, and that every command, option and highlight
+group has a tag.
+
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ## License
 

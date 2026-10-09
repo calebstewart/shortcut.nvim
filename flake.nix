@@ -16,7 +16,7 @@
       ];
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      version = "0.1.0-dev";
+      version = "0.1.0";
 
       # Only the files that make up the plugin, so edits to tests/CI/flake don't cause rebuilds.
       pluginSrc = lib.fileset.toSource {
@@ -37,6 +37,9 @@
           ./lua
           ./plugin
           ./tests
+          # The documentation tests check these against the code.
+          ./doc
+          ./README.md
           ./Makefile
           ./.stylua.toml
         ];
@@ -195,7 +198,8 @@
               chmod -R u+w src
               cd src
               export HOME="$TMPDIR"
-              make test
+              # Test files run in parallel, as many as the build may use.
+              make test JOBS="''${NIX_BUILD_CORES:-0}"
               touch $out
             '';
 
