@@ -436,7 +436,7 @@ function M.resolve(args, callback)
     return nil, { fields = fields, workflow_id = workflow.id, group_id = group and group.id or nil }
   end, function(thrown, err, spec)
     if thrown then
-      return callback((tostring(thrown):gsub('^[^\n]-:%d+: ', '', 1)))
+      return callback(notify.strip_location(thrown))
     end
     callback(err, spec)
   end)
@@ -449,7 +449,7 @@ end
 ---@param target string
 ---@return string
 local function refusal(target)
-  return ('shortcut.nvim: cannot write the draft to %s: :w creates the story, :q! discards it'):format(
+  return ('cannot write the draft to %s: :w creates the story, :q! discards it'):format(
     notify.flatten(target)
   )
 end
@@ -700,7 +700,7 @@ local function create(buf, on_done)
   end, function(thrown, outcome)
     cleanup()
     if thrown then
-      local msg = (tostring(thrown):gsub('^[^\n]-:%d+: ', '', 1))
+      local msg = notify.strip_location(thrown)
       outcome = posting and { err = uncertain_message(msg), uncertain = true } or { err = msg }
     end
     ---@cast outcome shortcut.create.Outcome
@@ -753,11 +753,13 @@ function M.on_write(ev)
       -- `:saveas`/`:file` renamed the buffer: give it its name back.
       pcall(vim.api.nvim_buf_set_name, buf, name)
     end
-    -- An error, not a message: `:wq file` and `:x file` must not go on to quit.
-    error(refusal(ev.match), 0)
+    -- The write fails: `:wq file` and `:x file` must not go on to quit.
+    notify.refuse_write(refusal(ev.match))
+    return
   end
   if d.created then
-    error(('shortcut.nvim: sc-%d was already created from this draft'):format(d.created), 0)
+    notify.refuse_write(('sc-%d was already created from this draft'):format(d.created))
+    return
   end
   if creating[buf] then
     notify.warn('the story is already being created: nothing more was sent')
@@ -771,7 +773,7 @@ function M.on_write(ev)
   end
   if d.uncertain and vim.v.cmdbang ~= 1 then
     -- Left modified, so `:wq`/`:x` don't close it.
-    notify.error(
+    notify.refuse_write(
       (
         'not sent: an earlier attempt may have created the story already. Check Shortcut; '
         .. ':w! sends it again (possibly creating it twice)'
@@ -815,7 +817,7 @@ function M.on_write(ev)
     return
   end
   if result.err then
-    notify.error(failure(result))
+    notify.refuse_write(failure(result))
     return
   end
   local id = result.id --[[@as integer]]
@@ -864,7 +866,7 @@ function M.open_draft(spec)
     buffer = buf,
     desc = 'shortcut.nvim: refuse partial writes of a draft',
     callback = function(ev)
-      error(refusal(ev.match), 0)
+      notify.refuse_write(refusal(ev.match))
     end,
   })
   -- Not triggered when Neovim makes the buffer current for `:wall` from another window.
@@ -908,7 +910,7 @@ function M.open(args)
     end
     local ok, open_err = pcall(M.open_draft, spec)
     if not ok then
-      notify.error(('create: %s'):format((tostring(open_err):gsub('^[^\n]-:%d+: ', '', 1))))
+      notify.error(('create: %s'):format(notify.strip_location(open_err)))
     end
   end)
 end

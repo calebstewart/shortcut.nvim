@@ -19,20 +19,13 @@ local MAX_TITLE = 60
 
 local STORIES_AND_EPICS = { story = true, epic = true }
 
---- An error message without the `file:line: ` prefix Lua adds.
----@param err any
----@return string
-local function message(err)
-  return (tostring(err):gsub('^[^\n]-:%d+: ', '', 1))
-end
-
 --- Run `fn` as an async task; an error it raises is reported as `<cmd>: <message>`.
 ---@param cmd string
 ---@param fn async fun()
 local function run(cmd, fn)
   async.run(fn, function(err)
     if err then
-      notify.error(('%s: %s'):format(cmd, message(err)))
+      notify.error(('%s: %s'):format(cmd, notify.strip_location(err)))
     end
   end)
 end
@@ -220,7 +213,9 @@ commands.register('comment', {
       end
       local ok, story = pcall(M.fetch_story, t.id)
       if not ok then
-        notify.warn(('comment: could not fetch sc-%d: %s'):format(t.id, message(story)))
+        notify.warn(
+          ('comment: could not fetch sc-%d: %s'):format(t.id, notify.strip_location(story))
+        )
         return
       end
       comment.set_title(buf, story.name)

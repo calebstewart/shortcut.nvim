@@ -682,7 +682,7 @@ function M.save(buf, id, opts, done)
     return run(st)
   end, function(thrown, err, done_opts)
     if thrown then
-      return finish((tostring(thrown):gsub('^[^\n]-:%d+: ', '', 1)))
+      return finish(notify.strip_location(thrown))
     end
     finish(err, done_opts)
   end)

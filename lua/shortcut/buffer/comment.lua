@@ -265,7 +265,8 @@ function M.post(buf)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local text = M.text(lines)
   if text == '' then
-    notify.error(('the comment is empty: nothing was posted to sc-%d'):format(id))
+    -- From the write: the write fails.
+    notify.refuse_write(('the comment is empty: nothing was posted to sc-%d'):format(id))
     return false, is_done
   end
 
@@ -349,7 +350,7 @@ end
 ---@param target string
 ---@return string
 local function refusal(target)
-  return ('shortcut.nvim: cannot write the comment to %s: :w posts it, :q! discards it'):format(
+  return ('cannot write the comment to %s: :w posts it, :q! discards it'):format(
     notify.flatten(target)
   )
 end
@@ -371,8 +372,9 @@ function M.on_write(ev)
       -- `:saveas` renamed the buffer before writing: give it its name back.
       pcall(vim.api.nvim_buf_set_name, buf, name)
     end
-    -- An error, not a message: `:wq file` and `:x file` must not go on to quit and lose the draft.
-    error(refusal(ev.match), 0)
+    -- The write fails: `:wq file` and `:x file` must not go on to quit and lose the draft.
+    notify.refuse_write(refusal(ev.match))
+    return
   end
   local typed_elsewhere = cmdline_win ~= nil
     and not (
@@ -513,7 +515,7 @@ function M.open(id, opts)
     buffer = buf,
     desc = 'shortcut.nvim: refuse partial writes of a comment',
     callback = function(ev)
-      error(refusal(ev.match), 0)
+      notify.refuse_write(refusal(ev.match))
     end,
   })
   -- Not triggered when Neovim makes the buffer current for `:wall` from another window.

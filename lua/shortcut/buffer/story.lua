@@ -1233,7 +1233,7 @@ M.handler = {
       if not ok then
         snapshots[buf] = nil
         -- Without the `file:line: ` prefix of the error.
-        return done((tostring(apply_err):gsub('^[^\n]-:%d+: ', '', 1)))
+        return done(require('shortcut.notify').strip_location(apply_err))
       end
       done()
       set_cursor(buf, 1)

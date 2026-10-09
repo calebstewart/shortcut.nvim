@@ -208,8 +208,7 @@ end
 ---@param err any
 ---@return string
 local function error_message(err)
-  local msg = tostring(err)
-  return (msg:gsub('^[^\n]-:%d+: ', '', 1))
+  return notify.strip_location(err)
 end
 
 ---@param name string
@@ -584,14 +583,14 @@ local function on_write(ev)
   end
   local info = vim.b[buf].shortcut
   if vim.api.nvim_buf_get_name(buf) ~= ev.match or type(info) ~= 'table' then
-    notify.error(('cannot write to %s'):format(ev.match))
+    notify.refuse_write(('cannot write to %s'):format(notify.flatten(ev.match)))
     return
   end
   local kind, id = info.kind, info.id
   -- 'nomodifiable' does not stop `:w`, and acwrite buffers are written even when unmodified.
   local state = load_state[buf]
   if state ~= 'loaded' then
-    notify.error(
+    notify.refuse_write(
       state == 'loading' and ('sc-%d is still loading'):format(id)
         or ('sc-%d is not loaded; :e! to retry'):format(id)
     )
@@ -599,12 +598,13 @@ local function on_write(ev)
   end
   local handler = registry[kind]
   if not handler or not handler.save then
-    notify.error(('saving %s is not supported'):format(PLURAL[kind] or kind))
+    notify.refuse_write(('saving %s is not supported'):format(PLURAL[kind] or kind))
     return
   end
 
   local tick = vim.b[buf].changedtick
   local finished = false
+  local in_write = true
   ---@type shortcut.buffer.SaveDone
   local function done(err, opts)
     main_loop(function()
@@ -614,7 +614,13 @@ local function on_write(ev)
       finished = true
       if err then
         -- Reported even if the buffer has gone: the changes were not saved.
-        notify.error(('failed to save sc-%d: %s'):format(id, err))
+        local msg = ('failed to save sc-%d: %s'):format(id, err)
+        if in_write then
+          -- Refused before anything was sent (e.g. invalid values).
+          notify.refuse_write(msg)
+        else
+          notify.error(msg)
+        end
       elseif
         not (opts and opts.keep_modified)
         and vim.api.nvim_buf_is_loaded(buf)
@@ -629,6 +635,7 @@ local function on_write(ev)
   if not ok then
     done(error_message(err))
   end
+  in_write = false
 end
 
 ---@param ev vim.api.keyset.create_autocmd.callback_args
