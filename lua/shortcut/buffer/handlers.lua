@@ -71,8 +71,8 @@ local registry = { story = placeholder('story'), epic = placeholder('epic') }
 --- The default resolver: `GET /stories/<id>`, and on 404 `GET /epics/<id>`.
 ---
 --- Stories and epics share one public-ID space, so an ID names at most one of them and the order
---- does not matter. (Not stated in the API docs; checked against a real workspace: thousands of
---- epic IDs interleave with story IDs and never coincide with story, label or iteration IDs, and
+--- does not matter. (Not stated in the API docs; checked against a real workspace: epic IDs
+--- interleave with story IDs and never coincide with story, label or iteration IDs, and
 --- `GET /stories/<epic id>` and `GET /epics/<story id>` answer 404.) The API modules are only
 --- loaded when an `sc-<id>` is opened.
 ---@type shortcut.buffer.Resolver
