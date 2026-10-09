@@ -80,6 +80,9 @@ local function render(patch, opts, refs_code)
     local comments = {}
     for id, line in pairs(meta.comments) do comments[tostring(id)] = line end
     meta.comments = comments
+    local files = {}
+    for id, line in pairs(meta.files) do files[tostring(id)] = line end
+    meta.files = files
     return { lines = lines, meta = meta }
   ]]):format(refs_code or '_G.refs'),
     { patch, opts }
@@ -128,8 +131,18 @@ local BODY = {
   '> **@unknown-' .. GONE .. '** · 2026-02-01 11:00',
   '> > A later reply, by someone no longer in the workspace.',
   '',
+  '**@Alex.Smith** · 2026-02-02 12:00',
+  '> Attachment: [diagram.png](https://media.example.com/files/331/diagram.png) · image/png · 256 KB',
+  '',
   '**@jdoe** · 2026-02-03 09:30',
   '> Last top-level comment.',
+  '> Second line.',
+  '',
+  -- A file uploaded at the same time as a comment comes after it.
+  '**@unknown-' .. GONE .. '** · 2026-02-03 09:30',
+  '> Attachment: [notes.txt](https://media.example.com/files/332/notes.txt) · text/plain · 1.5 KB',
+  '>',
+  '> Meeting notes.',
   '> Second line.',
 }
 
@@ -148,8 +161,9 @@ T['render()']['renders the whole story'] = function()
     tasks_section = { first = 20, last = 25 },
     tasks = { { id = 311, line = 22 }, { id = 312, line = 23 }, { id = 313, line = 24 } },
     comments_marker = 26,
-    comments_section = { first = 26, last = 41 },
-    comments = { ['321'] = 28, ['322'] = 33, ['324'] = 36, ['325'] = 39 },
+    comments_section = { first = 26, last = 50 },
+    comments = { ['321'] = 28, ['322'] = 33, ['324'] = 36, ['325'] = 42 },
+    files = { ['331'] = 39, ['332'] = 46 },
   })
 end
 
@@ -176,8 +190,9 @@ T['render()']['the header parses back to what was rendered'] = function()
   })
 end
 
-T['render()']['missing epic, iteration, estimate, owners, labels, tasks and comments'] = function()
+T['render()']['missing epic, iteration, estimate, owners, labels, tasks, comments and files'] = function()
   local r = render([[
+    s.files = nil
     s.epic_id = vim.NIL
     s.iteration_id = vim.NIL
     s.estimate = vim.NIL
@@ -300,6 +315,7 @@ T['render()']['comments: deleted ones skipped, unless they have replies'] = func
       { id = 5, author_id = '%s', created_at = '2026-03-01T13:00:00Z', deleted = false, parent_id = 2, text = 'deeper' },
       { id = 6, author_id = '%s', created_at = '2026-03-01T13:30:00Z', deleted = true, parent_id = 2, text = vim.NIL },
     }
+    s.files = {}
   ]]):format(JDOE, ALEX, JDOE, JDOE, JDOE))
   local start = r.meta.comments_marker + 2
   eq(vim.list_slice(r.lines, start, #r.lines), {
@@ -360,6 +376,203 @@ T['render()']['server strings with newlines stay on one line'] = function()
   eq(r.lines[r.meta.comments['2']], '**@unknown-odd id** · 2026-03-01 10:00')
   -- And the lines can be set in a buffer.
   child.lua('vim.api.nvim_buf_set_lines(0, 0, -1, false, ...)', { r.lines })
+end
+
+T['render()']['files: with the comments, by time; at the same time comments first, then IDs'] = function()
+  local r = render(([[
+    s.comments = {
+      { id = 10, author_id = '%s', created_at = '2026-03-01T10:00:00Z', deleted = false, text = 'c10' },
+      { id = 11, author_id = '%s', created_at = '2026-03-01T12:00:00Z', deleted = false, text = 'c11' },
+      { id = 12, author_id = '%s', created_at = '2026-03-01T11:00:00Z', deleted = false, parent_id = 10, text = 'reply' },
+    }
+    s.files = {
+      { id = 22, uploader_id = '%s', created_at = '2026-03-01T12:00:00Z', name = 'b.txt', size = 0 },
+      { id = 21, uploader_id = '%s', created_at = '2026-03-01T12:00:00+00:00', name = 'a.txt', size = 2048 },
+      { id = 20, uploader_id = vim.NIL, created_at = '2026-03-01T09:00:00.5Z', name = 'first.txt', content_type = 'text/plain', size = 5 },
+      { id = 24, uploader_id = '%s', created_at = '2026-03-01T10:30:00Z', name = 'mid.txt', size = 1 },
+      { id = 23, uploader_id = '%s', created_at = 'garbage', name = 'undated', size = 1 },
+      'not a file',
+      { name = 'no id' },
+    }
+  ]]):format(JDOE, ALEX, ALEX, ALEX, GONE, ALEX, JDOE))
+  local start = r.meta.comments_marker + 2
+  eq(vim.list_slice(r.lines, start, #r.lines), {
+    -- Unparsable dates sort first and are shown as they are.
+    '**@jdoe** · garbage',
+    '> Attachment: undated · 1 B',
+    '',
+    '**@unknown** · 2026-03-01 09:00',
+    '> Attachment: first.txt · text/plain · 5 B',
+    '',
+    '**@jdoe** · 2026-03-01 10:00',
+    '> c10',
+    '>',
+    '> **@Alex.Smith** · 2026-03-01 11:00',
+    '> > reply',
+    '',
+    -- Files are never replies: a thread stays together.
+    '**@Alex.Smith** · 2026-03-01 10:30',
+    '> Attachment: mid.txt · 1 B',
+    '',
+    '**@Alex.Smith** · 2026-03-01 12:00',
+    '> c11',
+    '',
+    '**@unknown-' .. GONE .. '** · 2026-03-01 12:00',
+    '> Attachment: a.txt · 2 KB',
+    '',
+    '**@Alex.Smith** · 2026-03-01 12:00',
+    '> Attachment: b.txt · 0 B',
+  })
+  eq(r.meta.comments, { ['10'] = start + 6, ['12'] = start + 9, ['11'] = start + 15 })
+  eq(r.meta.files, {
+    ['23'] = start,
+    ['20'] = start + 3,
+    ['24'] = start + 12,
+    ['21'] = start + 18,
+    ['22'] = start + 21,
+  })
+  eq(r.meta.comments_section.last, #r.lines)
+end
+
+T['render()']['files: name falls back to the filename, then the ID; type and size are optional'] = function()
+  local r = render([[
+    s.comments = {}
+    s.files = {
+      { id = 30, created_at = '2026-03-01T10:00:00Z', name = '', filename = 'upload.bin', size = vim.NIL, content_type = vim.NIL, url = vim.NIL, description = vim.NIL },
+      { id = 31, created_at = '2026-03-01T11:00:00Z', name = '  \n ', filename = vim.NIL, description = ' \n\n' },
+      { id = 32, created_at = '2026-03-01T12:00:00Z', name = ' n ', size = -1, content_type = '  ', description = '\n\n  indented\n\n' },
+    }
+  ]])
+  eq(vim.list_slice(r.lines, r.meta.comments_marker + 2, #r.lines), {
+    '**@unknown** · 2026-03-01 10:00',
+    '> Attachment: upload.bin',
+    '',
+    '**@unknown** · 2026-03-01 11:00',
+    '> Attachment: file 31',
+    '',
+    '**@unknown** · 2026-03-01 12:00',
+    '> Attachment: n',
+    '>',
+    '>   indented',
+  })
+end
+
+T['render()']['files: only https:// URLs without spaces or control characters are links'] = function()
+  local urls = {
+    { 'https://media.example.com/files/1/a%20b.png?x=1&y=2#z', true },
+    { 'https://media.example.com/files/[1]/a.png', true },
+    { 'http://media.example.com/files/1/a.png', false },
+    { 'HTTPS://media.example.com/files/1/a.png', false },
+    { 'javascript:alert(1)', false },
+    { 'data:text/html,hi', false },
+    { 'https:///files/1/a.png', false },
+    { 'https://', false },
+    { ' https://media.example.com/a.png', false },
+    { 'https://media.example.com/a b.png', false },
+    { 'https://media.example.com/a\tb.png', false },
+    { 'https://media.example.com/a\nb.png', false },
+    { 'https://media.example.com/a\0b.png', false },
+    { 'https://media.example.com/a\127b.png', false },
+    { 'https://media.example.com/a\194\160b.png', false }, -- U+00A0
+    { 'https://media.example.com/a\226\128\174gnp.exe', false }, -- U+202E
+    { 'https://media.example.com/a).png', false },
+    { 'https://media.example.com/a(.png', false },
+    { 'https://media.example.com/a>.png', false },
+    { 'https://media.example.com/a\\.png', false },
+    { 'https://media.example.com/a`.png', false },
+    { 42, false },
+  }
+  for _, u in ipairs(urls) do
+    eq({ u[1], child.lua_get('story.safe_url(...)', { u[1] }) }, u)
+  end
+  eq(child.lua_get('story.safe_url(vim.NIL)'), false)
+  eq(child.lua_get('story.safe_url(nil)'), false)
+
+  local r = render([[
+    s.comments = {}
+    s.files = {
+      { id = 1, created_at = '2026-03-01T10:00:00Z', name = 'a.png', url = 'http://media.example.com/a.png' },
+      { id = 2, created_at = '2026-03-01T11:00:00Z', name = 'b.png', url = 'https://media.example.com/b c.png' },
+      { id = 3, created_at = '2026-03-01T12:00:00Z', name = 'c.png', url = 'https://media.example.com/c.png' },
+    }
+  ]])
+  eq(r.lines[r.meta.files['1'] + 1], '> Attachment: a.png')
+  eq(r.lines[r.meta.files['2'] + 1], '> Attachment: b.png')
+  eq(r.lines[r.meta.files['3'] + 1], '> Attachment: [c.png](https://media.example.com/c.png)')
+end
+
+T['render()']['files: hostile names, types and descriptions render safely'] = function()
+  local r = render(([[
+    s.comments = {}
+    s.files = {
+      { id = 1, uploader_id = '%s', created_at = '2026-03-01T10:00:00Z', name = 'evil\nname\r\n.png',
+        url = 'https://media.example.com/1', content_type = 'image/png\n', size = 10,
+        description = 'line1\rline2\r\n\r\n' },
+      { id = 2, uploader_id = '%s', created_at = '2026-03-01T11:00:00Z', name = 'a\27[31mred\7\0\127\194\133.txt' },
+      { id = 3, uploader_id = '%s', created_at = '2026-03-01T12:00:00Z', name = 'gpj.\226\128\174exe',
+        content_type = 'text/\226\129\166plain\226\128\168x', description = 'desc \226\128\174 x\27y\tz\226\128\143' },
+      { id = 4, uploader_id = '%s', created_at = '2026-03-01T13:00:00Z', name = '[click](https://evil.example)',
+        url = 'https://media.example.com/4' },
+      { id = 5, uploader_id = '%s', created_at = '2026-03-01T14:00:00Z', name = '<https://evil.example> `x` \\[',
+        url = 'https://media.example.com/5 x' },
+      { id = 6, uploader_id = 'odd\nid', created_at = 'bad\ndate', name = '![img](https://evil.example/x.png)' },
+    }
+  ]]):format(JDOE, JDOE, JDOE, JDOE, JDOE))
+  eq(vim.list_slice(r.lines, r.meta.comments_marker + 2, #r.lines), {
+    '**@unknown-odd id** · bad date',
+    '> Attachment: !\\[img\\](https://evil.example/x.png)',
+    '',
+    '**@jdoe** · 2026-03-01 10:00',
+    '> Attachment: [evil name .png](https://media.example.com/1) · image/png · 10 B',
+    '>',
+    '> line1',
+    '> line2',
+    '',
+    '**@jdoe** · 2026-03-01 11:00',
+    '> Attachment: a�\\[31mred����.txt',
+    '',
+    '**@jdoe** · 2026-03-01 12:00',
+    '> Attachment: gpj.�exe · text/�plain�x',
+    '>',
+    '> desc � x�y\tz�',
+    '',
+    '**@jdoe** · 2026-03-01 13:00',
+    '> Attachment: [\\[click\\](https://evil.example)](https://media.example.com/4)',
+    '',
+    '**@jdoe** · 2026-03-01 14:00',
+    '> Attachment: \\<https://evil.example\\> \\`x\\` \\\\\\[',
+  })
+  -- And the lines can be set in a buffer.
+  child.lua('vim.api.nvim_buf_set_lines(0, 0, -1, false, ...)', { r.lines })
+end
+
+T['format_size()'] = function()
+  local cases = {
+    { 0, '0 B' },
+    { 1, '1 B' },
+    { 512.7, '512 B' },
+    { 1023, '1023 B' },
+    { 1024, '1 KB' },
+    { 1536, '1.5 KB' },
+    { 10137, '9.9 KB' },
+    { 10189, '10 KB' },
+    { 262144, '256 KB' },
+    { 1048575, '1 MB' },
+    { 1048576 * 12.3, '12 MB' },
+    { 5 * 1024 ^ 3, '5 GB' },
+    { 1.5 * 1024 ^ 5, '1536 TB' },
+    { -1, 'nil' },
+    { 'x', 'nil' },
+  }
+  for _, c in ipairs(cases) do
+    eq({ c[1], child.lua_get('tostring(story.format_size(...))', { c[1] }) }, c)
+  end
+  eq(
+    child.lua_get(
+      '{ story.format_size(0/0), story.format_size(math.huge), story.format_size(vim.NIL) }'
+    ),
+    {}
+  )
 end
 
 T['render()']['is pure: works in a fast event without touching buffers'] = function()
@@ -588,6 +801,8 @@ T['buffer']['modelines in story content are never applied'] = function()
   child.lua([[
     local s = vim.json.decode(_G.read_fixture('story_render'))
     s.comments[1].text = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
+    -- The last lines: the description of the last file.
+    s.files[1].description = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
     s.name = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
     _G.overrides['/stories/301'] = { status = 200, body = vim.json.encode(s) }
   ]])
@@ -617,6 +832,8 @@ T['buffer']['modelines stay off when options are copied on entering (cpo+=S)'] =
   child.lua([[
     local s = vim.json.decode(_G.read_fixture('story_render'))
     s.comments[1].text = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
+    -- The last lines: the description of the last file.
+    s.files[1].description = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
     _G.overrides['/stories/301'] = { status = 200, body = vim.json.encode(s) }
   ]])
   edit('shortcut://story/301')
@@ -677,14 +894,14 @@ T['buffer']['a comment anchor puts the cursor on the comment'] = function()
   child.api.nvim_win_set_cursor(0, { 1, 0 })
   edit('https://app.shortcut.com/acme/story/301#activity-325')
   child.lua('vim.wait(50)')
-  eq(child.api.nvim_win_get_cursor(0), { 39, 0 })
+  eq(child.api.nvim_win_get_cursor(0), { 42, 0 })
   eq(count('/stories/301'), 1)
   eq(messages(), {})
 
   -- An unknown comment warns and leaves the cursor alone.
   edit('https://app.shortcut.com/acme/story/301#activity-999')
   child.lua('vim.wait(50)')
-  eq(child.api.nvim_win_get_cursor(0), { 39, 0 })
+  eq(child.api.nvim_win_get_cursor(0), { 42, 0 })
   eq(messages()[1].msg, 'shortcut.nvim: comment 999 not found on sc-301')
 end
 

@@ -197,6 +197,37 @@ T['an untouched buffer sends nothing'] = function()
   eq(child.bo.modified, false)
 end
 
+T['files in the comments section are never sent'] = function()
+  local attachment = '> Attachment: [diagram.png](https://media.example.com/files/331/diagram.png)'
+    .. ' · image/png · 256 KB'
+  local function find(text)
+    for i, l in ipairs(lines()) do
+      if l == text then
+        return i
+      end
+    end
+  end
+  local row = find(attachment)
+  eq(type(row), 'number')
+  eq(find('> Meeting notes.') ~= nil, true)
+  -- Unedited: nothing to send.
+  write()
+  eq(writes(), {})
+  eq(last_message(), { msg = 'shortcut.nvim: sc-301: no changes', level = INFO })
+  -- Edits to a file entry alone send nothing either.
+  set_line(row, '> Attachment: [other.png](https://media.example.com/other.png)')
+  set_line(row - 1, '**@Alex.Smith** · 2000-01-01 00:00')
+  write()
+  eq(writes(), {})
+  -- Edits elsewhere are sent as usual, and the files are shown again as they are.
+  set_line(12, '# New title')
+  write()
+  eq(writes(), { { method = 'PUT', path = '/stories/301', body = { name = 'New title' } } })
+  eq(find(attachment), row)
+  eq(lines()[row - 1], '**@Alex.Smith** · 2026-02-02 12:00')
+  eq(child.bo.modified, false)
+end
+
 T['edits are sent in one PUT, then the story is reloaded'] = function()
   set_line(12, '# New title')
   set_line(4, 'state: Done')

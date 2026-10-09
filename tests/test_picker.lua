@@ -450,6 +450,18 @@ T['preview_lines()']['renders the full story, cached for the session'] = functio
   eq(#r.lines, #expected)
   eq(r.lines[1], '---')
   eq(vim.tbl_contains(r.lines, '<!-- shortcut:tasks -->'), true)
+  -- Files too (links only: nothing else is fetched).
+  eq(
+    vim.tbl_contains(
+      r.lines,
+      '> Attachment: [diagram.png](https://media.example.com/files/331/diagram.png) · image/png · 256 KB'
+    ),
+    true
+  )
+  eq(vim.tbl_contains(r.lines, '> Meeting notes.'), true)
+  for _, url in ipairs(urls()) do
+    eq(url:find('media.example.com', 1, true), nil)
+  end
   eq(count('/stories/101'), 1)
   eq(child.lua_get('picker.cached_preview({ kind = "story", id = 101 }) ~= nil'), true)
   preview_lines('story', 101)
