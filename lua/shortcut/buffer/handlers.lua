@@ -948,6 +948,34 @@ function M.setup()
   })
 end
 
+---@class shortcut.buffer.Status
+---@field sc_ids boolean Whether the `sc-<id>` handler is registered.
+---@field net 'guarded'|'unguarded'|'absent' The built-in `nvim.net.remotefile` `BufReadCmd`
+--- handlers: all guarded (Shortcut URLs skipped), some not (they would download Shortcut pages),
+--- or none (that plugin is disabled or not loaded).
+---@field includeexpr 'global'|'other' Whether the global 'includeexpr' is this plugin's (`gf` on
+--- `sc-<id>` in buffers without their own) or something else.
+
+--- How the routing is set up, for `:checkhealth`.
+---@return shortcut.buffer.Status
+function M.status()
+  local sc = vim.api.nvim_get_autocmds({ group = SC_GROUP, event = 'BufReadCmd' })
+  local ok, net = pcall(vim.api.nvim_get_autocmds, { group = NET_GROUP, event = 'BufReadCmd' })
+  local net_state = 'absent'
+  for _, ac in ipairs(ok and net or {}) do
+    if type(ac.callback) == 'function' and wrapped[ac.callback] then
+      net_state = net_state == 'unguarded' and 'unguarded' or 'guarded'
+    else
+      net_state = 'unguarded'
+    end
+  end
+  return {
+    sc_ids = #sc > 0,
+    net = net_state,
+    includeexpr = vim.go.includeexpr == INCLUDEEXPR and 'global' or 'other',
+  }
+end
+
 --- Forget cached `sc-<id>` kinds (for tests).
 function M._clear_cache()
   kind_cache = {}
