@@ -54,7 +54,8 @@ end
 ---@param name string
 ---@return string?
 local function env(name)
-  local v = vim.env[name]
+  -- Not `vim.env`: it goes through `vim.fn`, which fails in fast (libuv callback) contexts.
+  local v = vim.uv.os_getenv(name)
   if v == nil or v == '' then
     return nil
   end
@@ -97,6 +98,16 @@ local function exists(path)
   return vim.uv.fs_stat(path) ~= nil
 end
 
+---@param path string
+---@param err? string
+---@return string
+local function unreadable(path, err)
+  return (
+    'cannot read %s: %s. Make sure your user owns it and can read it (e.g. `chmod 600 %s`), '
+    .. 'or set $SHORTCUT_API_TOKEN instead.'
+  ):format(path, err or 'unknown error', path)
+end
+
 --- Read and decode a CLI config file.
 ---@param path string
 ---@return table? data `nil` with no error if the file does not exist.
@@ -107,13 +118,13 @@ local function read_json(path)
     if code == 'ENOENT' then
       return nil
     end
-    return nil, ('cannot read %s: %s'):format(path, open_err)
+    return nil, unreadable(path, open_err)
   end
   local stat = vim.uv.fs_fstat(fd)
   local data, read_err = vim.uv.fs_read(fd, stat and stat.size or 0, 0)
   vim.uv.fs_close(fd)
   if not data then
-    return nil, ('cannot read %s: %s'):format(path, read_err)
+    return nil, unreadable(path, read_err)
   end
 
   data = vim.trim(data)
@@ -270,21 +281,57 @@ function M.redacted(token)
   return '****' .. token:sub(-4)
 end
 
---- Move a legacy CLI config dir into place, as the CLI itself does on startup. Writing a new
---- config dir next to a legacy one would make the CLI's own migration fail.
+--- Create `dir` and any missing parents. Uses libuv only, so it works in fast contexts.
+---@param dir string
+---@param mode integer Mode of `dir` itself; created parents get 0755 (less the umask).
+---@return boolean ok
+---@return string? err
+local function mkdir_p(dir, mode)
+  if exists(dir) then
+    return true
+  end
+  local parent = vim.fs.dirname(dir)
+  if parent ~= dir then
+    local ok, err = mkdir_p(parent, tonumber('755', 8))
+    if not ok then
+      return false, err
+    end
+  end
+  local ok, err, code = vim.uv.fs_mkdir(dir, mode)
+  if not ok and code ~= 'EEXIST' then
+    return false, ('cannot create %s: %s'):format(dir, err)
+  end
+  return true
+end
+
+--- Move a legacy CLI config dir into place, as the CLI itself does on startup, when the config
+--- file does not exist yet. `resolve()` reads the legacy file in that case, so writing a new file
+--- instead would both lose its other keys and make the CLI's own migration (a rename onto the
+--- config dir) fail.
 ---@param paths shortcut.auth.CliPaths
 ---@return boolean ok
 ---@return string? err
 local function migrate_legacy(paths)
-  local dir = vim.fs.dirname(paths.file)
-  if exists(dir) then
+  if exists(paths.file) then
     return true
   end
+  local dir = vim.fs.dirname(paths.file)
   for _, legacy in ipairs(paths.legacy_dirs) do
     if exists(legacy) then
-      local parent = vim.fs.dirname(dir)
-      if not exists(parent) and vim.fn.mkdir(parent, 'p') == 0 then
-        return false, ('cannot create %s'):format(parent)
+      if exists(dir) then
+        -- Like the CLI's rename, this only works onto an empty directory.
+        if not vim.uv.fs_rmdir(dir) then
+          return false,
+            (
+              'cannot move the legacy short config %s to %s, which already exists and is not '
+              .. 'empty. Move %s into %s yourself, then try again.'
+            ):format(legacy, dir, vim.fs.joinpath(legacy, 'config.json'), dir)
+        end
+      else
+        local ok, err = mkdir_p(vim.fs.dirname(dir), tonumber('755', 8))
+        if not ok then
+          return false, err
+        end
       end
       local ok, err = vim.uv.fs_rename(legacy, dir)
       if not ok then
@@ -356,12 +403,15 @@ function M.write_cli_config(fields)
     return nil, read_err
   end
   local merged = vim.tbl_extend('force', existing or {}, fields)
+  if next(merged) == nil then
+    merged = vim.empty_dict() -- encode as `{}`, not `[]`
+  end
 
   local dir = vim.fs.dirname(path)
   -- A new config dir only holds secrets: keep it private.
-  ---@diagnostic disable-next-line: param-type-mismatch (the mode is a number)
-  if not exists(dir) and vim.fn.mkdir(dir, 'p', tonumber('700', 8)) == 0 then
-    return nil, ('cannot create %s'):format(dir)
+  ok, err = mkdir_p(dir, tonumber('700', 8))
+  if not ok then
+    return nil, err
   end
   ok, err = write_atomic(path, vim.json.encode(merged))
   if not ok then

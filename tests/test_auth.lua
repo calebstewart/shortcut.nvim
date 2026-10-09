@@ -301,12 +301,17 @@ T['errors']['a JSON value that is not an object is malformed'] = function()
   contains(r.err, 'not a valid JSON object')
 end
 
-T['errors']['an unreadable file names the path'] = function()
+T['errors']['an unreadable file names the path and how to fix it'] = function()
+  if vim.uv.getuid() == 0 then
+    MiniTest.skip('root can read any file')
+  end
   write(default_file(), { token = TOKEN })
   vim.uv.fs_chmod(default_file(), 0)
   local r = resolve()
   eq(r.ok, nil)
   contains(r.err, 'cannot read ' .. default_file())
+  contains(r.err, 'chmod 600')
+  contains(r.err, 'SHORTCUT_API_TOKEN')
 end
 
 T['errors']['a failing setup function is reported without a traceback'] = function()
@@ -465,6 +470,31 @@ T['write_cli_config()']['migrates a legacy config dir like the CLI'] = function(
   eq(read_json(default_file()), { token = TOKEN, workspaces = { a = { b = 1 } } })
 end
 
+T['write_cli_config()']['migrates a legacy config dir onto an empty config dir'] = function()
+  write(home .. '/.clubhouse-cli/config.json', { token = 'old', workspaces = { a = { b = 1 } } })
+  vim.fn.mkdir(vim.fs.dirname(default_file()), 'p')
+  eq(resolve().ok.token, 'old')
+  eq(write_cli_config({ token = TOKEN }), { ok = true })
+  eq(vim.uv.fs_stat(home .. '/.clubhouse-cli'), nil)
+  eq(read_json(default_file()), { token = TOKEN, workspaces = { a = { b = 1 } } })
+end
+
+T['write_cli_config()']['refuses to migrate onto a non-empty config dir'] = function()
+  write(home .. '/.clubhouse-cli/config.json', { token = 'old' })
+  write(vim.fs.dirname(default_file()) .. '/other', 'x')
+  local r = write_cli_config({ token = TOKEN })
+  eq(r.ok, nil)
+  contains(r.err, 'cannot move the legacy short config ' .. home .. '/.clubhouse-cli')
+  contains(r.err, 'yourself')
+  eq(read_json(home .. '/.clubhouse-cli/config.json'), { token = 'old' })
+  eq(vim.uv.fs_stat(default_file()), nil)
+end
+
+T['write_cli_config()']['writes {} rather than [] for no fields'] = function()
+  eq(write_cli_config({}), { ok = true })
+  eq(table.concat(vim.fn.readfile(default_file()), '\n'), '{}')
+end
+
 T['write_cli_config()']['resets the cached token'] = function()
   full_file()
   eq(resolve().ok.token, TOKEN)
@@ -476,6 +506,35 @@ T['write_cli_config()']['shows no messages'] = function()
   write_cli_config({ token = TOKEN })
   resolve()
   eq(messages(), {})
+end
+
+T['fast context'] = new_set()
+
+T['fast context']['works from a libuv callback'] = function()
+  full_file()
+  local r = child.lua([[
+    local out
+    local timer = assert(vim.uv.new_timer())
+    timer:start(0, 0, function()
+      timer:close()
+      local ok, err = pcall(function()
+        local path = auth.cli_config_path()
+        local first, first_err = auth.resolve()
+        local wrote, write_err = auth.write_cli_config({ token = 'fresh-token' })
+        local second, second_err = auth.resolve()
+        return {
+          path = path,
+          first = first and first.token or first_err,
+          wrote = wrote or write_err,
+          second = second and second.token or second_err,
+        }
+      end)
+      out = ok and err or { error = tostring(err) }
+    end)
+    vim.wait(5000, function() return out ~= nil end)
+    return out
+  ]])
+  eq(r, { path = default_file(), first = TOKEN, wrote = true, second = 'fresh-token' })
 end
 
 return T
