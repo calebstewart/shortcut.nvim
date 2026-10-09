@@ -64,6 +64,7 @@ require('shortcut').setup({
   http = { timeout = 30 },  -- seconds
   tasks = {
     show_owners = true,   -- show task owners as a trailing ` · @mention` on task lines
+    confirm_delete = true, -- ask before a save deletes tasks
   },
 })
 ```
@@ -139,6 +140,7 @@ To fetch everything again now (e.g. after adding a label), run `:Shortcut refres
 | `:Shortcut browse [target]` | Open the story or epic in the browser |
 | `:Shortcut yank [target]` | Copy the URL of the story or epic |
 | `:Shortcut refresh` | Fetch the lookup lists again and reload the current Shortcut buffer |
+| `:Shortcut diff` | Compare a story buffer with the story on Shortcut |
 | `:Shortcut login` | Save an API token to the shared `short` config |
 | `:Shortcut help` | List available subcommands |
 
@@ -258,8 +260,10 @@ Description…
 - **Title and description:** `# <title>`, then the description as written in Shortcut.
 - **Tasks**, in Shortcut's order. The section is always there, even when empty. A task's owners
   follow its description: the **last** ` · ` followed only by `@mention`s holds the owners, and
-  everything before it is the description. (So a task description that itself ends in
-  ` · @name` is misread as having an owner.) Set `tasks.show_owners = false` to hide owners.
+  everything before it is the description. A description that itself ends in ` · @name` is
+  shown with a backslash before that dot (`Email team \· @name`), so it is never read as
+  owners; a backslash right before a `·` in a description is shown doubled. Set
+  `tasks.show_owners = false` to hide owners.
 - **Comments** are read-only: oldest first, each with its author and local time, the body
   quoted; replies are nested one quote level deeper under the comment they answer. Deleted
   comments are left out (a deleted comment with replies shows as `*(deleted comment)*`).
@@ -269,8 +273,68 @@ Description…
   marker before it are the real ones.
 - Modelines are disabled in these buffers, so text from the server can never set options.
 - A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
-- `:e!` fetches the story again. Editing (`:w`) is not available yet: it reports so and keeps
-  your changes in the buffer.
+- `:e!` fetches the story again, discarding your edits.
+
+### Editing stories
+
+Edit the buffer and `:w` to save the changes to Shortcut. Only what you changed is sent: one
+`PUT /stories/<id>` with the changed fields, then one call per added, changed or deleted task.
+The story is then reloaded (the cursor stays on the same line) and the buffer is unmodified.
+
+| In the buffer | Saved as |
+|---|---|
+| `# <title>` | the story's name (required) |
+| the description (between the title and the tasks marker) | the description, as written, without trailing blank lines |
+| `type` | `feature`, `bug` or `chore` |
+| `state` | a state of the story's **own** workflow, by name (case is ignored) |
+| `owners` | mention names (case is ignored, the `@` is optional); disabled members can't be added |
+| `epic` | the epic ID at the start of the value (the name after it is ignored); empty removes the epic |
+| `iteration` | an iteration name or ID; empty removes the iteration |
+| `estimate` | a non-negative integer; empty removes the estimate |
+| `labels` | names of **existing** labels (case is ignored); an unknown name is an error, never a new label |
+| task lines | see below |
+
+- `id` and `url` are read-only: changing them is an error. Comments are read-only; edits below
+  the comments marker are ignored (and undone by the reload).
+- Every value is checked before anything is sent. Problems (an unknown state, member, label or
+  iteration, an epic that doesn't exist, a malformed line…) are shown as diagnostics on their
+  lines, with one summary message, and **nothing** is sent until they are fixed. Names are
+  checked against the [lookup-list cache](#lookup-list-cache); if something was added recently,
+  clear the cache. An `unknown-<id>` left as it is never counts as a change.
+- An unchanged buffer sends nothing (`:w` says "no changes"). So does a value written
+  differently but meaning the same (other case, extra spaces, owners in another order).
+- **Tasks:** `- [ ] description` lines in the tasks section. Toggle `[ ]`/`[x]`, edit the text,
+  add lines (new tasks are added at the end of the list), or delete lines. Owners are the
+  trailing ` · @mention @mention` part: add, change or remove it (removing it removes the
+  owners). Unknown or disabled members are errors on that line. To end a description with a
+  literal ` · @name`, write the dot as `\·` (`\\·` for a backslash followed by a dot). With
+  `tasks.show_owners = false`, owners are not shown and never changed: a ` · @name` you type is
+  part of the description. Reordering tasks is not saved. Blank lines are fine there; any other
+  line is an error.
+- Tasks are matched to lines by invisible marks, so editing a line in place (`cc`, `:s`,
+  `:move`, inserting text) keeps it the same task. A line that loses its mark because it was
+  deleted and put back (`dd` then `p`) or replaced (as plugins that toggle checkboxes may do)
+  is matched by its text: a replaced line to the task whose line it replaced, if the
+  description is the same (the checkbox and owners may differ), and a moved line to the only
+  task left that reads exactly the same (checkbox and owners included). Anything else, such as
+  deleting a task and typing a similar line elsewhere, is a deleted task plus a new one, and the
+  delete prompt asks. A copy (`yyp`) is a new task.
+- **Deleting tasks** asks first (unless `tasks.confirm_delete = false`), listing them:
+  **Delete** saves everything; **Keep tasks** saves everything else and the tasks come back
+  with the reload; **Cancel save** (also `<Esc>`) sends nothing and keeps your edits.
+- **Conflicts:** if someone else changed the story since it was loaded, the save is refused and
+  nothing is sent. `:Shortcut diff` opens the version on Shortcut side by side with your buffer
+  (close it to leave diff mode); then `:w!` saves your changes over theirs (only the fields you
+  changed are sent), or `:e!` reloads theirs, discarding yours. `:w!` does not skip the delete
+  question.
+- If the story is saved but some task calls fail, the message lists what was saved and what
+  failed, and the buffer keeps your edits; `:w` again sends only what failed. If someone else
+  changed the story while it was being saved, that `:w` reports a conflict instead (so their
+  change is never reverted silently); `:w!` then sends what failed, plus your values for
+  anything they changed that you had edited too.
+- If the changes are saved but reloading the story afterwards fails, the buffer stays modified
+  and saving is refused until `:e!` reloads it (saving again could send the same changes twice).
+- While a save runs the buffer is read-only.
 
 ## Epic buffers
 
