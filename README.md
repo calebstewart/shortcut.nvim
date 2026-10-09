@@ -280,8 +280,14 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
   (close it to leave diff mode); then `:w!` saves your changes over theirs (only the fields you
   changed are sent), or `:e!` reloads theirs, discarding yours. `:w!` does not skip the delete
   question.
-- If the story is saved but some task calls fail, the failures are listed and the buffer keeps
-  your edits; `:w` again sends only what failed. While a save runs the buffer is read-only.
+- If the story is saved but some task calls fail, the message lists what was saved and what
+  failed, and the buffer keeps your edits; `:w` again sends only what failed. If someone else
+  changed the story while it was being saved, that `:w` reports a conflict instead (so their
+  change is never reverted silently); `:w!` then sends what failed, plus your values for
+  anything they changed that you had edited too.
+- If the changes are saved but reloading the story afterwards fails, the buffer stays modified
+  and saving is refused until `:e!` reloads it (saving again could send the same changes twice).
+- While a save runs the buffer is read-only.
 
 ## Development
 

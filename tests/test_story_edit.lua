@@ -595,7 +595,12 @@ T['failures']['failed task calls are reported; :w sends only those again'] = fun
   eq(#writes(), 3)
   eq(child.bo.modified, true)
   eq(last_message(), {
-    msg = "shortcut.nvim: failed to save sc-301: sc-301: 1 change of title, 1 task updated, 1 task added failed:\n- add task 'Will fail' (line 25): POST /stories/301/tasks: HTTP 400: Nope\nThe buffer keeps your edits; :w sends what failed again, :e! reloads.",
+    msg = 'shortcut.nvim: failed to save sc-301: some changes could not be saved.\n'
+      .. 'Saved: title, 1 task updated.\n'
+      .. 'Failed:\n'
+      .. "- add task 'Will fail' (line 25): POST /stories/301/tasks: HTTP 400: Nope\n"
+      .. 'Your edits are still in the buffer: :w sends only what failed again, :e! reloads '
+      .. '(discarding them).',
     level = ERROR,
   })
   -- The edits are still there.
@@ -625,6 +630,74 @@ T['failures']['a task created before a failure is not created twice'] = function
   write()
   eq(writes(), { { method = 'PUT', path = '/stories/301/tasks/312', body = { complete = true } } })
   eq(child.lua_get('#_G.server.tasks'), 4)
+end
+
+--- Make the first `PUT` of task 312 fail, running `meanwhile` (server-side code) first.
+---@param meanwhile string
+local function fail_task_update(meanwhile)
+  child.lua(
+    [[
+    local routes, meanwhile = _G.routes, loadstring(...)
+    _G.routes = function(req)
+      local path = req.url:gsub('^https://api%.app%.shortcut%.com/api/v3', ''):gsub('%?.*', '')
+      if req.method == 'PUT' and path == '/stories/301/tasks/312' and not _G.task_failed then
+        _G.task_failed = true
+        table.insert(_G.writes, { method = req.method, path = path, body = vim.json.decode(req.body) })
+        meanwhile()
+        return { status = 500, body = '{}' }
+      end
+      return routes(req)
+    end
+  ]],
+    { meanwhile }
+  )
+end
+
+T['failures']["someone else's change during a partly failed save is never reverted silently"] = function()
+  fail_task_update([[
+    _G.server.estimate = 8
+    _G.server.updated_at = '2026-09-09T00:00:00Z'
+  ]])
+  set_line(12, '# Mine')
+  set_line(23, '- [x] Open task')
+  write()
+  eq(#writes(), 2)
+  eq(child.bo.modified, true)
+  local msg = last_message().msg
+  eq(msg:find('Saved: title.\nFailed:\n- update task', 1, true) ~= nil, true)
+  eq(msg:find('also changed on Shortcut by someone else meanwhile', 1, true) ~= nil, true)
+  -- The buffer still says 5; :w does not send it back, it reports a conflict.
+  eq(lines()[8], 'estimate: 5')
+  child.lua('_G.writes = {}')
+  write()
+  eq(writes(), {})
+  eq(last_message().msg:find('was changed on Shortcut since it was loaded', 1, true) ~= nil, true)
+  -- :w! sends what failed, but not the title again, and not the old estimate.
+  write(true)
+  eq(writes(), { { method = 'PUT', path = '/stories/301/tasks/312', body = { complete = true } } })
+  eq(child.lua_get('_G.server.estimate'), 8)
+  eq(lines()[8], 'estimate: 8')
+  eq(child.bo.modified, false)
+end
+
+T['failures']['a change on the server to a field just saved is a conflict too'] = function()
+  fail_task_update([[
+    _G.server.name = 'Theirs'
+    _G.server.updated_at = '2026-09-09T00:00:00Z'
+  ]])
+  set_line(12, '# Mine')
+  set_line(23, '- [x] Open task')
+  write()
+  eq(last_message().msg:find('also changed on Shortcut by someone else', 1, true) ~= nil, true)
+  child.lua('_G.writes = {}')
+  write()
+  eq(writes(), {})
+  -- :w! overwrites theirs with the buffer's, as for any conflict.
+  write(true)
+  eq(writes(), {
+    { method = 'PUT', path = '/stories/301', body = { name = 'Mine' } },
+    { method = 'PUT', path = '/stories/301/tasks/312', body = { complete = true } },
+  })
 end
 
 --- Make the next `GET /stories/301` after a write fail, once.

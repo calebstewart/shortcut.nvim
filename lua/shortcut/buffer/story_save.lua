@@ -12,8 +12,9 @@
 ---   6. sends one `PUT /stories/{id}` with the changed fields, then the task updates, creations
 ---      and deletions, in that order;
 ---   7. reloads the story, keeping the cursor on the same line where possible. If some task
----      calls failed, the buffer keeps the edits instead, and the snapshot is moved to what the
----      server now has, so the next `:w` sends only what failed.
+---      calls failed, the buffer keeps the edits instead, and the snapshot is moved past what
+---      was saved (see `baseline()`), so the next `:w` sends only what failed. If the reload
+---      fails, saving is refused until `:e!` (`story.invalidate()`).
 ---
 --- The buffer is not modifiable while a save runs: what is reloaded would replace any edit
 --- made meanwhile.
@@ -222,6 +223,149 @@ local function confirm_delete(id, deletes)
   return 'cancel'
 end
 
+--- What a save sent successfully. The story update always succeeded (the save stops otherwise).
+---@class shortcut.story_save.Sent
+---@field story table The `UpdateStory` body.
+---@field fields string[] Names of the buffer fields it changed.
+---@field tasks { update: shortcut.story_diff.TaskUpdate[], create: shortcut.story_diff.TaskCreate[], delete: shortcut.story_diff.TaskDelete[] } The task calls that succeeded.
+---@field created table<integer, integer> Line -> ID of each task created from it.
+
+--- Story fields an `UpdateStory` key sets, when not just the key itself.
+local STORY_FIELDS = { labels = { 'labels', 'label_ids' } }
+
+---@param list any
+---@return any[]
+local function list_of(list)
+  return type(list) == 'table' and list or {}
+end
+
+--- The snapshot to keep after a save that partly failed (the buffer keeps its edits), so that
+--- the next `:w` sends only what failed, never what was saved again:
+---   - `fresh` (the story fetched after the save) if it differs from the snapshot only by what
+---     this save sent, and has exactly what was sent for those. `fresh.updated_at` then becomes
+---     the one the conflict check expects.
+---   - Otherwise someone else changed the story meanwhile. Adopting `fresh` would make their
+---     changes look like the baseline, and the next `:w` would silently revert them (the buffer
+---     still holds the old values). Instead, the old story with only what this save sent applied
+---     (taken from `fresh`), keeping the old `updated_at`: the next `:w` reports a conflict, and
+---     `:w!` sends only the user's own edits that are not saved yet.
+--- Changes to comments are ignored (they are read-only).
+---@param snap shortcut.story.Snapshot The snapshot the save started from.
+---@param sent shortcut.story_save.Sent
+---@param fresh table
+---@param epic? shortcut.story.Epic The epic fetched with `fresh`.
+---@param cur shortcut.story_parse.Story The buffer as saved.
+---@param marks table<integer, integer> The buffer's task lines -> task IDs (before the save's creations).
+---@return table story
+---@return shortcut.story.Refs refs
+---@return boolean others Whether someone else changed the story.
+function M.baseline(snap, sent, fresh, epic, cur, marks)
+  local old = snap.story
+  local expected = vim.deepcopy(old)
+  local others = false
+  for key in pairs(sent.story) do
+    for _, k in ipairs(STORY_FIELDS[key] or { key }) do
+      expected[k] = vim.deepcopy(fresh[k])
+    end
+  end
+
+  local fresh_tasks = {} ---@type table<any, table>
+  for _, t in ipairs(list_of(fresh.tasks)) do
+    if type(t) == 'table' and t.id ~= nil then
+      fresh_tasks[t.id] = t
+    end
+  end
+  local updated, deleted, created = {}, {}, {} ---@type table<any, true>, table<any, true>, table<any, true>
+  for _, u in ipairs(sent.tasks.update) do
+    updated[u.id] = true
+  end
+  for _, d in ipairs(sent.tasks.delete) do
+    deleted[d.id] = true
+  end
+  local tasks = {}
+  for _, t in ipairs(list_of(expected.tasks)) do
+    local tid = type(t) == 'table' and t.id or nil
+    if tid ~= nil and deleted[tid] then
+      -- Deleted by this save.
+    elseif tid ~= nil and updated[tid] then
+      if fresh_tasks[tid] then
+        table.insert(tasks, vim.deepcopy(fresh_tasks[tid]))
+      else
+        -- Updated, then deleted by someone else.
+        others = true
+        table.insert(tasks, t)
+      end
+    else
+      table.insert(tasks, t)
+    end
+  end
+  local lines = vim.tbl_keys(sent.created)
+  table.sort(lines)
+  for _, line in ipairs(lines) do
+    local tid = sent.created[line]
+    created[tid] = true
+    if fresh_tasks[tid] then
+      table.insert(tasks, vim.deepcopy(fresh_tasks[tid]))
+    else
+      others = true
+    end
+  end
+  expected.tasks = tasks
+
+  local fresh_refs = story.cache_refs(epic)
+  local expected_refs =
+    story.cache_refs((epic and epic.id == expected.epic_id) and epic or snap.refs.epic)
+  local opts = { show_owners = snap.show_owners }
+  local flines, fmeta = story.render(fresh, fresh_refs, opts)
+
+  if not others then
+    -- Did anything else change? (Comments don't count.)
+    local elines, emeta = story.render(expected, expected_refs, opts)
+    others = not vim.deep_equal(
+      vim.list_slice(elines, 1, emeta.comments_marker - 1),
+      vim.list_slice(flines, 1, fmeta.comments_marker - 1)
+    )
+  end
+
+  if not others then
+    -- Does the server have what was sent? If someone else changed the same fields or tasks
+    -- after this save, the next `:w` would send them again.
+    local fparsed = parse.parse(flines, opts)
+    if not fparsed then
+      others = true
+    else
+      local orig_tasks = {}
+      for _, t in ipairs(fmeta.tasks) do
+        orig_tasks[t.line] = t.id
+      end
+      local m = vim.deepcopy(marks)
+      for line, tid in pairs(sent.created) do
+        m[line] = tid
+      end
+      local retry, errors = diff.diff(fparsed, cur, {
+        story = fresh,
+        lookup = M.cache_lookup(),
+        orig_tasks = orig_tasks,
+        marks = m,
+      })
+      others = #errors > 0
+      for key in pairs(retry.story) do
+        others = others or sent.story[key] ~= nil
+      end
+      for _, kind in ipairs({ 'update', 'delete' }) do
+        for _, t in ipairs(retry.tasks[kind]) do
+          others = others or updated[t.id] == true or created[t.id] == true
+        end
+      end
+    end
+  end
+
+  if others then
+    return expected, expected_refs, true
+  end
+  return fresh, fresh_refs, false
+end
+
 ---@class shortcut.story_save.State
 ---@field buf integer
 ---@field id integer
@@ -335,7 +479,13 @@ local function run(st)
     end
   end
   local failures = {} ---@type string[]
-  local created = {} ---@type table<integer, integer> Line -> new task ID.
+  ---@type shortcut.story_save.Sent
+  local sent = {
+    story = changes.story,
+    fields = changes.fields,
+    tasks = { update = {}, create = {}, delete = {} },
+    created = {},
+  }
   for _, u in ipairs(changes.tasks.update) do
     local err = async.await(stories.tasks.update, id, u.id, u.fields)
     if err then
@@ -343,6 +493,8 @@ local function run(st)
         failures,
         ("update task '%s' (line %d): %s"):format(u.description, u.line, http.format_error(err))
       )
+    else
+      table.insert(sent.tasks.update, u)
     end
   end
   for _, c in ipairs(changes.tasks.create) do
@@ -352,16 +504,22 @@ local function run(st)
         failures,
         ("add task '%s' (line %d): %s"):format(c.fields.description, c.line, http.format_error(err))
       )
-    elseif type(task) == 'table' and type(task.id) == 'number' then
-      created[c.line] = task.id
+    else
+      table.insert(sent.tasks.create, c)
+      if type(task) == 'table' and type(task.id) == 'number' then
+        sent.created[c.line] = task.id
+      end
     end
   end
   for _, d in ipairs(changes.tasks.delete) do
     local err = async.await(stories.tasks.delete, id, d.id)
     if err then
       table.insert(failures, ("delete task '%s': %s"):format(d.description, http.format_error(err)))
+    else
+      table.insert(sent.tasks.delete, d)
     end
   end
+  local created = sent.created
 
   -- Reload.
   local ferr, fresh, epic = async.await(story.fetch, id)
@@ -383,10 +541,9 @@ local function run(st)
     return nil
   end
   if #failures > 0 then
-    local msg = ('sc-%d: %s of %s failed:\n- %s'):format(
-      id,
-      plural(#failures, 'change'),
-      summary,
+    local saved = diff.summary({ fields = sent.fields, tasks = sent.tasks } --[[@as table]])
+    local msg = ('some changes could not be saved.\nSaved: %s.\nFailed:\n- %s'):format(
+      saved == '' and 'nothing' or saved,
       table.concat(failures, '\n- ')
     )
     if ferr or not fresh then
@@ -395,13 +552,25 @@ local function run(st)
         .. 'is refused until then, as it could send what was saved again.'
       ):format(msg, ferr)
     end
-    if current(st) then
-      local rebased = story.rebase(buf, fresh, story.cache_refs(epic), created)
-      if rebased then
-        st.own[rebased] = true
-      end
+    if not current(st) then
+      return msg
     end
-    return msg .. '\nThe buffer keeps your edits; :w sends what failed again, :e! reloads.'
+    local base, base_refs, others = M.baseline(st.snap, sent, fresh, epic, cur, mark_lines(buf))
+    local rebased = story.rebase(buf, base, base_refs, created)
+    if rebased then
+      st.own[rebased] = true
+    end
+    if others then
+      return (
+        '%s\nsc-%d was also changed on Shortcut by someone else meanwhile, so :w will report a '
+        .. 'conflict. Your edits are still in the buffer: :Shortcut diff shows the differences, '
+        .. ':w! sends what failed again (over their changes to the same fields), :e! reloads '
+        .. '(discarding your edits).'
+      ):format(msg, id)
+    end
+    return msg
+      .. '\nYour edits are still in the buffer: :w sends only what failed again, :e! reloads '
+      .. '(discarding them).'
   end
 
   if ferr or not fresh then
