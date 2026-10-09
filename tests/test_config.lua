@@ -35,7 +35,7 @@ T['defaults apply without setup()'] = function()
     sc_ids = true,
     picker = { page_size = 25, max_results = 200 },
     http = { timeout = 30 },
-    tasks = { show_owners = true },
+    tasks = { show_owners = true, confirm_delete = true },
   })
   eq(messages(), {})
 end
@@ -110,12 +110,21 @@ end
 
 T['tasks.show_owners must be a boolean'] = function()
   eq(setup({ tasks = { show_owners = false } }), true)
-  eq(get().tasks, { show_owners = false })
+  eq(get().tasks, { show_owners = false, confirm_delete = true })
   eq(setup({ tasks = { show_owners = 'no' } }), false)
   expect.no_error(function()
     assert(messages()[1].msg:find('tasks.show_owners', 1, true))
   end)
   eq(get().tasks.show_owners, false)
+end
+
+T['tasks.confirm_delete must be a boolean'] = function()
+  eq(setup({ tasks = { confirm_delete = false } }), true)
+  eq(get().tasks, { show_owners = true, confirm_delete = false })
+  eq(setup({ tasks = { confirm_delete = 1 } }), false)
+  expect.no_error(function()
+    assert(messages()[1].msg:find('tasks.confirm_delete', 1, true))
+  end)
 end
 
 T['setup() rejects a non-table argument'] = function()
