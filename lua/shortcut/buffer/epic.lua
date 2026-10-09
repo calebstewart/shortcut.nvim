@@ -533,8 +533,21 @@ local function find_cr(maps)
   return nil
 end
 
+--- The register `v:register` holds when none was typed: `+` or `*` if `'clipboard'` has
+--- `unnamedplus` or `unnamed` (`unnamedplus` wins), else `"`.
+---@return string
+local function default_register()
+  local flags = vim.split(vim.o.clipboard, ',', { plain = true })
+  if vim.list_contains(flags, 'unnamedplus') then
+    return '+'
+  elseif vim.list_contains(flags, 'unnamed') then
+    return '*'
+  end
+  return '"'
+end
+
 --- Run a mapping (as returned by `nvim_get_keymap()`) as if its keys had been typed after the
---- count.
+--- register and count.
 ---
 --- Its keys are put at the front of the typeahead (flag `i`), so they run before any keys typed
 --- or fed after `<CR>` (e.g. the rest of a macro). In a remapping rhs, `<CR>` itself is not
@@ -564,6 +577,10 @@ local function replay(m)
 
   -- Pieces in order: { keys, mode }.
   local pieces = {} ---@type { [1]: string, [2]: string }[]
+  if vim.v.register ~= default_register() then
+    -- A register was typed before `<CR>` (`"a<CR>`): it applies to the keys too.
+    table.insert(pieces, { '"' .. vim.v.register, 'n' })
+  end
   if vim.v.count > 0 then
     -- The count was typed before `<CR>`: as with any mapping, it applies to the keys.
     table.insert(pieces, { tostring(vim.v.count), 'n' })

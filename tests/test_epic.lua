@@ -734,6 +734,40 @@ T['buffer']['<CR> replay runs before keys typed after it, with the count'] = fun
   eq(messages(), {})
 end
 
+T['buffer']['<CR> replay keeps the register typed before it'] = function()
+  child.cmd('nnoremap <CR> p')
+  edit('shortcut://epic/202')
+  child.fn.setreg('"', 'U', 'c')
+  child.fn.setreg('a', 'A', 'c')
+  local function paste(keys)
+    child.api.nvim_win_set_cursor(0, { 12, 0 })
+    child.type_keys(keys)
+    local line = lines()[12]
+    child.cmd('silent undo')
+    return line
+  end
+  eq(paste('<CR>'), '#U Render Epic')
+  eq(paste('"a<CR>'), '#A Render Epic')
+  eq(paste('"a2<CR>'), '#AA Render Epic')
+  eq(paste('2"a<CR>'), '#AA Render Epic')
+
+  -- With 'clipboard', the default register is the clipboard one: it is not passed on, so the
+  -- paste still comes from the clipboard, and an explicit register still wins.
+  child.lua([[
+    vim.g.clipboard = {
+      name = 'test',
+      copy = { ['+'] = function() end, ['*'] = function() end },
+      paste = { ['+'] = function() return { 'P' } end, ['*'] = function() return { 'S' } end },
+    }
+  ]])
+  child.o.clipboard = 'unnamedplus'
+  child.type_keys('<Esc>') -- v:register follows 'clipboard' after the next command.
+  eq(paste('<CR>'), '#P Render Epic')
+  eq(paste('"a<CR>'), '#A Render Epic')
+  eq(paste('"*<CR>'), '#S Render Epic')
+  eq(messages(), {})
+end
+
 T['buffer']['gf on a story line opens the story'] = function()
   edit('shortcut://epic/202')
   child.api.nvim_win_set_cursor(0, { 29, 4 })
