@@ -5,7 +5,7 @@
 ---      `shortcut.buffer.story_diff`). Every problem becomes a diagnostic (namespace
 ---      `shortcut.edit`) on its line, plus one summary message, and nothing is sent;
 ---   2. checks that a new epic exists;
----   3. with no changes, says so and marks the buffer unmodified;
+---   3. with no changes, says so, puts back any edited comments and marks the buffer unmodified;
 ---   4. checks for a conflict: if the story's `updated_at` on the server is not the one loaded,
 ---      refuses (unless `:w!`), pointing to `:Shortcut diff`, `:w!` and `:e!`;
 ---   5. asks before deleting tasks (`tasks.confirm_delete`): Delete / Keep tasks / Cancel save;
@@ -402,6 +402,28 @@ local function current(st)
   return vim.api.nvim_buf_is_loaded(st.buf) and story.snapshot(st.buf) == st.snap
 end
 
+--- Put the comments section of the buffer (from its marker to the end) back as it was loaded, if
+--- it was edited. The change can be undone. The buffer is then marked unmodified (the save's
+--- own check, that nothing changed during the save, would otherwise see this change).
+---@param st shortcut.story_save.State
+---@param cur { comments_marker: integer }
+---@return boolean restored
+local function restore_comments(st, cur)
+  local buf, snap = st.buf, st.snap
+  local from = snap.meta.comments_marker
+  local loaded = vim.list_slice(snap.lines, from)
+  local now = vim.api.nvim_buf_get_lines(buf, cur.comments_marker - 1, -1, false)
+  if vim.deep_equal(loaded, now) then
+    return false
+  end
+  local modifiable = vim.bo[buf].modifiable
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, cur.comments_marker - 1, -1, false, loaded)
+  vim.bo[buf].modifiable = modifiable
+  vim.bo[buf].modified = false
+  return true
+end
+
 --- The save itself, in a coroutine. Returns what `done` gets.
 ---@async
 ---@param st shortcut.story_save.State
@@ -446,7 +468,13 @@ local function run(st)
     if changes.relink then
       story.relink(buf, changes.relink)
     end
-    notify.info(('sc-%d: no changes'):format(id))
+    -- Edits to the (read-only) comments are not saved: put them back as they were, rather than
+    -- leave them showing in a buffer that is marked as saved.
+    if restore_comments(st, cur) then
+      notify.info(('sc-%d: no changes (comments are read-only: restored)'):format(id))
+    else
+      notify.info(('sc-%d: no changes'):format(id))
+    end
     return nil
   end
 
