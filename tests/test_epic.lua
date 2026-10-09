@@ -672,6 +672,37 @@ T['buffer']['<CR> on lines without an ID runs the <CR> mapping it replaced'] = f
   )
 end
 
+T['buffer'][':e! picks up a markdown <CR> mapping set up since the buffer was opened'] = function()
+  edit('shortcut://epic/202')
+  -- E.g. a markdown plugin loaded lazily after the epic was opened: its FileType handler only
+  -- runs for this buffer when :e! sets the filetype again.
+  child.lua([[
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'markdown',
+      command = 'nnoremap <buffer> <CR> :<C-U>let g:md_hits = get(g:, "md_hits", 0) + v:count1<CR>',
+    })
+  ]])
+  -- Twice: on the second reload our own mapping is in place until FileType replaces it, and
+  -- must not be taken for the one to replay.
+  for _ = 1, 2 do
+    child.cmd('edit!')
+    child.lua('_G.wait_loaded()')
+  end
+  eq(
+    child.lua_get([[vim.fn.maparg('<CR>', 'n', false, true).desc]]),
+    'shortcut.nvim: open the sc-<id> on this line'
+  )
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('2<CR>')
+  eq(child.lua_get('vim.g.md_hits'), 2)
+  eq(child.api.nvim_win_get_cursor(0), { 12, 0 })
+  -- Story lines still open the story.
+  child.api.nvim_win_set_cursor(0, { 29, 0 })
+  child.type_keys('<CR>')
+  wait_for('shortcut://story/401')
+  eq(child.lua_get('vim.g.md_hits'), 2)
+end
+
 --- Count calls to the epic `<CR>` handler, failing after a few so that a loop ends.
 local function count_cr_calls()
   child.lua([[

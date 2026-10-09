@@ -307,9 +307,10 @@ local function load(buf, target, opts)
   -- (e.g. `:doautocmd`, or `nvim_exec_autocmds()` for some plugin's User event).
   vim.bo[buf].modeline = false
   vim.b[buf].shortcut = { kind = kind, id = id }
-  if vim.bo[buf].filetype ~= 'markdown' then
-    vim.bo[buf].filetype = 'markdown'
-  end
+  -- Set even when it is already markdown, as filetype detection does on `:e!`: reloading drops
+  -- the buffer's highlighting (the treesitter highlighter detaches), and only FileType starts it
+  -- again (with the markdown ftplugin and any other FileType handlers).
+  vim.bo[buf].filetype = 'markdown'
 
   generation[buf] = (generation[buf] or 0) + 1
   local gen = generation[buf]

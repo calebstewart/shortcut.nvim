@@ -202,6 +202,32 @@ T['shortcut://'][':e! reloads and ignores superseded results'] = function()
   eq(lines(), { 'second' })
 end
 
+T['shortcut://']['highlighting is restarted by :e!'] = function()
+  child.lua([[
+    _G.filetype_events = 0
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'markdown',
+      callback = function() _G.filetype_events = _G.filetype_events + 1 end,
+    })
+  ]])
+  local function highlighted()
+    return child.lua_get('vim.treesitter.highlighter.active[vim.api.nvim_get_current_buf()] ~= nil')
+  end
+  for _, name in ipairs({ 'shortcut://story/42', 'shortcut://epic/7' }) do
+    child.lua('_G.filetype_events = 0')
+    edit(name)
+    eq(child.lua_get('_G.filetype_events'), 1)
+    eq(highlighted(), true)
+    child.cmd('edit!')
+    settle()
+    eq(highlighted(), true)
+    -- FileType fires again, as for a file, so the markdown ftplugin restarts treesitter.
+    eq(child.lua_get('_G.filetype_events'), 2)
+    eq(child.bo.filetype, 'markdown')
+    eq(child.bo.modeline, false)
+  end
+end
+
 T['shortcut://']['a non-canonical spelling switches to the canonical buffer'] = function()
   edit('shortcut://story/0042')
   eq(cur_name(), 'shortcut://story/42')
