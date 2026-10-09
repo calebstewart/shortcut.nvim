@@ -35,6 +35,7 @@ T['defaults apply without setup()'] = function()
     sc_ids = true,
     picker = { page_size = 25, max_results = 200 },
     http = { timeout = 30 },
+    tasks = { show_owners = true },
   })
   eq(messages(), {})
 end
@@ -105,6 +106,16 @@ T['unknown keys warn but still apply the rest'] = function()
     assert(msgs[2].msg:find("unknown option 'sc_idz'", 1, true))
   end)
   eq(get().http.timeout, 7)
+end
+
+T['tasks.show_owners must be a boolean'] = function()
+  eq(setup({ tasks = { show_owners = false } }), true)
+  eq(get().tasks, { show_owners = false })
+  eq(setup({ tasks = { show_owners = 'no' } }), false)
+  expect.no_error(function()
+    assert(messages()[1].msg:find('tasks.show_owners', 1, true))
+  end)
+  eq(get().tasks.show_owners, false)
 end
 
 T['setup() rejects a non-table argument'] = function()
