@@ -756,6 +756,17 @@ function M.setup()
     desc = 'shortcut.nvim: open Shortcut URL',
     callback = on_web_read,
   })
+  vim.api.nvim_create_autocmd({ 'BufEnter', 'BufWinEnter' }, {
+    group = group,
+    pattern = 'shortcut://*',
+    desc = 'shortcut.nvim: keep modelines off',
+    callback = function(ev)
+      -- With 'cpoptions' containing `S`, entering a buffer copies the global options into it,
+      -- 'modeline' included. Modelines are applied after the autocommands for an event, so
+      -- turning it off again here keeps server text from setting options.
+      vim.bo[ev.buf].modeline = false
+    end,
+  })
   vim.api.nvim_create_autocmd('BufUnload', {
     group = group,
     pattern = 'shortcut://*',

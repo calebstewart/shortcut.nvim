@@ -613,6 +613,31 @@ T['buffer']['modelines in story content are never applied'] = function()
   eq(child.bo.filetype, 'markdown')
 end
 
+T['buffer']['modelines stay off when options are copied on entering (cpo+=S)'] = function()
+  child.lua([[
+    local s = vim.json.decode(_G.read_fixture('story_render'))
+    s.comments[1].text = 'vim: set ts=3 sw=3 tw=13 ft=lua :'
+    _G.overrides['/stories/301'] = { status = 200, body = vim.json.encode(s) }
+  ]])
+  edit('shortcut://story/301')
+  local buf = child.api.nvim_get_current_buf()
+  child.lua([[
+    vim.o.modeline = true
+    vim.o.cpoptions = vim.o.cpoptions .. 'S'
+    vim.cmd('enew')
+  ]])
+  child.cmd('buffer ' .. buf)
+  child.cmd('doautocmd BufEnter')
+  child.lua(
+    [[vim.api.nvim_exec_autocmds('User', { pattern = 'SomePluginEvent', modeline = true })]]
+  )
+  eq(child.bo.modeline, false)
+  -- `S` itself resets buffer options to their global values (filetype included); what matters
+  -- is that the modeline's values were not applied.
+  eq(child.bo.filetype ~= 'lua', true)
+  eq(child.lua_get('vim.bo.ts == 3 or vim.bo.sw == 3 or vim.bo.tw == 13'), false)
+end
+
 T['buffer']['tasks.show_owners = false hides task owners'] = function()
   child.lua([[require('shortcut').setup({ tasks = { show_owners = false } })]])
   edit('shortcut://story/301')
