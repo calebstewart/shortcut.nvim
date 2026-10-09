@@ -750,20 +750,6 @@ T['buffer']['renders without the epic name when the epic cannot be fetched'] = f
   eq(messages(), {})
 end
 
-T['buffer'][':w says editing is not available yet and keeps the changes'] = function()
-  edit('shortcut://story/301')
-  child.api.nvim_buf_set_lines(0, 11, 12, false, { '# edited' })
-  child.cmd('write')
-  eq(child.bo.modified, true)
-  eq(messages(), {
-    {
-      msg = 'shortcut.nvim: failed to save sc-301: editing stories is not available yet; the changes were not saved',
-      level = vim.log.levels.ERROR,
-    },
-  })
-  eq(count('/stories/301'), 1)
-end
-
 T['buffer']['closing the buffer while loading cancels the requests'] = function()
   child.lua([[
     -- Hold the story response until released.

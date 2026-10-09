@@ -24,6 +24,10 @@ local M = {}
 M.lazy = {
   story = { module = 'shortcut.buffer.commands', desc = 'Open a story by ID, sc-<id> or URL' },
   epic = { module = 'shortcut.buffer.commands', desc = 'Open an epic by ID, sc-<id> or URL' },
+  diff = {
+    module = 'shortcut.buffer.story_save',
+    desc = "Diff the story buffer against the server's version",
+  },
   login = { module = 'shortcut.login', desc = 'Save an API token to the shared `short` CLI config' },
 }
 

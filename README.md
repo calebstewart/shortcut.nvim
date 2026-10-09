@@ -63,6 +63,7 @@ require('shortcut').setup({
   http = { timeout = 30 },  -- seconds
   tasks = {
     show_owners = true,   -- show task owners as a trailing ` · @mention` on task lines
+    confirm_delete = true, -- ask before a save deletes tasks
   },
 })
 ```
@@ -137,6 +138,7 @@ require('shortcut.cache').clear()
 |---|---|
 | `:Shortcut story {id \| sc-<id> \| url}` | Open a story |
 | `:Shortcut epic {id \| sc-<id> \| url}` | Open an epic |
+| `:Shortcut diff` | Compare a story buffer with the story on Shortcut |
 | `:Shortcut login` | Save an API token to the shared `short` config |
 | `:Shortcut help` | List available subcommands |
 
@@ -226,8 +228,57 @@ Description…
   marker before it are the real ones.
 - Modelines are disabled in these buffers, so text from the server can never set options.
 - A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
-- `:e!` fetches the story again. Editing (`:w`) is not available yet: it reports so and keeps
-  your changes in the buffer.
+- `:e!` fetches the story again, discarding your edits.
+
+### Editing stories
+
+Edit the buffer and `:w` to save the changes to Shortcut. Only what you changed is sent: one
+`PUT /stories/<id>` with the changed fields, then one call per added, changed or deleted task.
+The story is then reloaded (the cursor stays on the same line) and the buffer is unmodified.
+
+| In the buffer | Saved as |
+|---|---|
+| `# <title>` | the story's name (required) |
+| the description (between the title and the tasks marker) | the description, as written, without trailing blank lines |
+| `type` | `feature`, `bug` or `chore` |
+| `state` | a state of the story's **own** workflow, by name (case is ignored) |
+| `owners` | mention names (case is ignored, the `@` is optional); disabled members can't be added |
+| `epic` | the epic ID at the start of the value (the name after it is ignored); empty removes the epic |
+| `iteration` | an iteration name or ID; empty removes the iteration |
+| `estimate` | a non-negative integer; empty removes the estimate |
+| `labels` | names of **existing** labels (case is ignored); an unknown name is an error, never a new label |
+| task lines | see below |
+
+- `id` and `url` are read-only: changing them is an error. Comments are read-only; edits below
+  the comments marker are ignored (and undone by the reload).
+- Every value is checked before anything is sent. Problems (an unknown state, member, label or
+  iteration, an epic that doesn't exist, a malformed line…) are shown as diagnostics on their
+  lines, with one summary message, and **nothing** is sent until they are fixed. Names are
+  checked against the [lookup-list cache](#lookup-list-cache); if something was added recently,
+  clear the cache. An `unknown-<id>` left as it is never counts as a change.
+- An unchanged buffer sends nothing (`:w` says "no changes"). So does a value written
+  differently but meaning the same (other case, extra spaces, owners in another order).
+- **Tasks:** `- [ ] description` lines in the tasks section. Toggle `[ ]`/`[x]`, edit the text,
+  add lines (new tasks are added at the end of the list), or delete lines. Owners are the
+  trailing ` · @mention @mention` part: add, change or remove it (removing it removes the
+  owners). Unknown or disabled members are errors on that line. With
+  `tasks.show_owners = false`, owners are not shown and never changed: a ` · @name` you type is
+  part of the description. Reordering tasks is not saved. Blank lines are fine there; any other
+  line is an error.
+- Tasks are matched to lines by invisible marks, so editing a line in place (`cc`, `:s`,
+  `:move`, inserting text) keeps it the same task. A line that is deleted and put back
+  (`dd` then `p`) counts as a deleted task plus a new one, and so does a copy (`yyp`) as a new
+  one.
+- **Deleting tasks** asks first (unless `tasks.confirm_delete = false`), listing them:
+  **Delete** saves everything; **Keep tasks** saves everything else and the tasks come back
+  with the reload; **Cancel save** (also `<Esc>`) sends nothing and keeps your edits.
+- **Conflicts:** if someone else changed the story since it was loaded, the save is refused and
+  nothing is sent. `:Shortcut diff` opens the version on Shortcut side by side with your buffer
+  (close it to leave diff mode); then `:w!` saves your changes over theirs (only the fields you
+  changed are sent), or `:e!` reloads theirs, discarding yours. `:w!` does not skip the delete
+  question.
+- If the story is saved but some task calls fail, the failures are listed and the buffer keeps
+  your edits; `:w` again sends only what failed. While a save runs the buffer is read-only.
 
 ## Development
 

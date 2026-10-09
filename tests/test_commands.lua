@@ -59,9 +59,9 @@ end
 T['completion'] = new_set()
 
 T['completion']['lists subcommands'] = function()
-  eq(complete('Shortcut '), { 'epic', 'help', 'login', 'story' })
+  eq(complete('Shortcut '), { 'diff', 'epic', 'help', 'login', 'story' })
   add_fake_lazy()
-  eq(complete('Shortcut '), { 'epic', 'fake', 'help', 'login', 'story' })
+  eq(complete('Shortcut '), { 'diff', 'epic', 'fake', 'help', 'login', 'story' })
   eq(complete('Shortcut h'), { 'help' })
   eq(complete('Shortcut! f'), { 'fake' })
 end

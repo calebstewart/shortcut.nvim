@@ -655,14 +655,24 @@ function M.jump(buf, comment)
   return true
 end
 
---- Write a rendered story into `buf`: lines, task extmarks, snapshot.
+--- Namespace of the diagnostics a failed save leaves (see `shortcut.buffer.story_save`).
+M.EDIT_NS = 'shortcut.edit'
+
+---@return integer
+function M.edit_ns()
+  return vim.api.nvim_create_namespace(M.EDIT_NS)
+end
+
+--- Write a rendered story into `buf`: lines, task extmarks, snapshot. Clears the diagnostics of
+--- a previous save.
 ---@param buf integer
 ---@param story table
 ---@param refs shortcut.story.Refs
 ---@param show_owners boolean
 ---@return shortcut.story.Snapshot
-local function apply(buf, story, refs, show_owners)
+function M.apply(buf, story, refs, show_owners)
   local lines, meta = M.render(story, refs, { show_owners = show_owners })
+  vim.diagnostic.reset(M.edit_ns(), buf)
   local undolevels = vim.bo[buf].undolevels
   vim.bo[buf].undolevels = -1
   vim.bo[buf].modifiable = true
@@ -684,6 +694,55 @@ local function apply(buf, story, refs, show_owners)
     meta = meta,
     refs = refs,
     show_owners = show_owners,
+    task_marks = task_marks,
+  }
+  snapshots[buf] = snap
+  return snap
+end
+
+--- Make `story` (fetched again) the snapshot of `buf` without changing its lines: after a save
+--- that partly failed, the buffer keeps the edits, and the next save compares them with what
+--- the server has now, so only what failed is sent again. Task extmarks of tasks the server no
+--- longer has are removed; `created` adds marks for tasks created by that save.
+---@param buf integer
+---@param story table
+---@param refs shortcut.story.Refs
+---@param created table<integer, integer> 1-based line -> ID of the task created from it.
+---@return shortcut.story.Snapshot?
+function M.rebase(buf, story, refs, created)
+  local old = snapshots[buf]
+  if not old then
+    return nil
+  end
+  local lines, meta = M.render(story, refs, { show_owners = old.show_owners })
+  local exists = {}
+  for _, t in ipairs(meta.tasks) do
+    exists[t.id] = true
+  end
+  local ns = M.tasks_ns()
+  local task_marks = {}
+  for mark, id in pairs(old.task_marks) do
+    if exists[id] then
+      task_marks[mark] = id
+    else
+      pcall(vim.api.nvim_buf_del_extmark, buf, ns, mark)
+    end
+  end
+  local count = vim.api.nvim_buf_line_count(buf)
+  for line, id in pairs(created) do
+    if exists[id] and line <= count then
+      local mark = vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, { invalidate = true })
+      task_marks[mark] = id
+    end
+  end
+  ---@type shortcut.story.Snapshot
+  local snap = {
+    story = story,
+    updated_at = type(story.updated_at) == 'string' and story.updated_at or nil,
+    lines = lines,
+    meta = meta,
+    refs = refs,
+    show_owners = old.show_owners,
     task_marks = task_marks,
   }
   snapshots[buf] = snap
@@ -828,7 +887,7 @@ M.handler = {
         )
       end
       local show_owners = require('shortcut.config').get().tasks.show_owners
-      local ok, apply_err = pcall(apply, buf, story, M.cache_refs(epic), show_owners)
+      local ok, apply_err = pcall(M.apply, buf, story, M.cache_refs(epic), show_owners)
       if not ok then
         snapshots[buf] = nil
         -- Without the `file:line: ` prefix of the error.
@@ -844,8 +903,8 @@ M.handler = {
     loading[buf] = handle
   end,
 
-  save = function(_, _, _, done)
-    done('editing stories is not available yet; the changes were not saved')
+  save = function(buf, id, opts, done)
+    require('shortcut.buffer.story_save').save(buf, id, opts, done)
   end,
 
   jump = function(buf, comment)
