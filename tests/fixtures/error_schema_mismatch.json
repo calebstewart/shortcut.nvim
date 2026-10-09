@@ -1,0 +1,6 @@
+{
+  "message": "The request included invalid parameters.",
+  "errors": {
+    "name": "missing-required-key"
+  }
+}
