@@ -370,7 +370,11 @@ function M.diff(orig, cur, ctx)
           return orphan_of(t, id)
         end, ids)
       end
-      -- On the line itself first.
+      -- On the line itself first, then down the walk. A candidate must have the line's
+      -- description, so a wrong match can only pair tasks with identical descriptions. That is
+      -- harmless: a matched task is updated to equal its line, and unmatched lines are created,
+      -- so the server ends up with the buffer's tasks either way. Only which of the identical
+      -- tasks keeps which ID can differ.
       local found = orphans(invalid[t.line] or {})
       if #found ~= 1 then
         local candidates = {}
