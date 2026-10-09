@@ -7,15 +7,17 @@ local root = vim.fn.fnamemodify(debug.getinfo(1, 'S').source:sub(2), ':p:h:h')
 vim.opt.runtimepath:prepend(root)
 vim.opt.runtimepath:prepend(vim.env.MINI_NVIM or (root .. '/deps/mini.nvim'))
 
--- Never see the real `short` config or a real token: tests that need one create it themselves.
--- (Without a token, nothing can reach the network either.) Applies to child processes, which
--- also load this file and inherit the environment.
+-- Never see the real `short` config, a real token or the real lookup-list cache: tests that
+-- need them create them themselves. (Without a token, nothing can reach the network either.)
+-- Applies to child processes, which also load this file and inherit the environment.
 local home = vim.fn.tempname() .. '-home'
 vim.fn.mkdir(home, 'p')
 vim.env.HOME = home
 for _, name in ipairs({
   'XDG_CONFIG_HOME',
   'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_STATE_HOME',
   'SHORTCUT_API_TOKEN',
   'CLUBHOUSE_API_TOKEN',
 }) do

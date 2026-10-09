@@ -16,8 +16,11 @@ _G.responses = {}
 _G.routes = nil
 _G.cancelled = 0
 
+-- Relative to this file, so tests may change the working directory.
+local fixtures = vim.fs.joinpath(vim.fs.dirname(debug.getinfo(1, 'S').source:sub(2)), 'fixtures')
+
 function _G.fixture(name)
-  local f = assert(io.open(('tests/fixtures/%s.json'):format(name), 'r'))
+  local f = assert(io.open(('%s/%s.json'):format(fixtures, name), 'r'))
   local s = f:read('*a')
   f:close()
   return s

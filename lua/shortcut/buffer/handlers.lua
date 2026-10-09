@@ -32,8 +32,9 @@ local M = {}
 ---@field jump? fun(buf: integer, comment: integer) Jump to a comment in an already-loaded buffer.
 
 --- Resolves the kind of an `sc-<id>`. Call `done('story'|'epic')`, `done(nil)` if no such
---- object exists, or `done(nil, err)` on failure.
----@alias shortcut.buffer.Resolver fun(id: integer, done: fun(kind?: shortcut.Kind, err?: string))
+--- object exists, or `done(nil, err)` on failure. May return a handle whose `cancel()` stops the
+--- lookup: it is called if the `sc-<id>` buffer goes away first.
+---@alias shortcut.buffer.Resolver fun(id: integer, done: fun(kind?: shortcut.Kind, err?: string)): { cancel: fun(self: any) }?
 
 --- Provides the user's workspace slug (`url_slug`), or `nil` if unknown.
 ---@alias shortcut.buffer.SlugSource fun(done: fun(slug?: string))
@@ -67,8 +68,48 @@ end
 ---@type table<shortcut.Kind, shortcut.buffer.Handler>
 local registry = { story = placeholder('story'), epic = placeholder('epic') }
 
+--- The default resolver: `GET /stories/<id>`, and on 404 `GET /epics/<id>`.
+---
+--- Stories and epics share one public-ID space, so an ID names at most one of them and the order
+--- does not matter. (Not stated in the API docs; checked against a real workspace: epic IDs
+--- interleave with story IDs and never coincide with story, label or iteration IDs, and
+--- `GET /stories/<epic id>` and `GET /epics/<story id>` answer 404.) The API modules are only
+--- loaded when an `sc-<id>` is opened.
+---@type shortcut.buffer.Resolver
+function M.api_resolver(id, done)
+  local http = require('shortcut.http')
+  local handle = { cancelled = false, current = nil } ---@type { cancelled: boolean, current?: shortcut.http.Handle, cancel: fun(self: any) }
+  function handle:cancel()
+    self.cancelled = true
+    if self.current then
+      self.current:cancel()
+    end
+  end
+  handle.current = require('shortcut.api.stories').get(id, function(err)
+    if not err then
+      return done('story')
+    end
+    if err.status ~= 404 then
+      return done(nil, http.format_error(err))
+    end
+    if handle.cancelled then
+      return
+    end
+    handle.current = require('shortcut.api.epics').get(id, function(epic_err)
+      if not epic_err then
+        return done('epic')
+      end
+      if epic_err.status == 404 then
+        return done(nil)
+      end
+      done(nil, http.format_error(epic_err))
+    end)
+  end)
+  return handle
+end
+
 ---@type shortcut.buffer.Resolver?
-local resolver = nil
+local resolver = M.api_resolver
 
 ---@type table<integer, shortcut.Kind>
 local kind_cache = {}
@@ -116,8 +157,8 @@ function M.register(kind, handler)
   registry[kind] = handler
 end
 
---- Set how `sc-<id>` is resolved to a story or an epic. Without a resolver, `sc-<id>` is
---- assumed to be a story. Answers are remembered for the session.
+--- Set how `sc-<id>` is resolved to a story or an epic. The default is `api_resolver`; with
+--- `nil`, `sc-<id>` is assumed to be a story. Answers are remembered for the session.
 ---@param fn shortcut.buffer.Resolver?
 function M.set_resolver(fn)
   vim.validate('fn', fn, 'function', true)
@@ -146,6 +187,14 @@ local function main_loop(fn)
   else
     fn()
   end
+end
+
+--- The message of an error caught with `pcall()`, without the `file:line: ` prefix Lua adds.
+---@param err any
+---@return string
+local function error_message(err)
+  local msg = tostring(err)
+  return (msg:gsub('^[^\n]-:%d+: ', '', 1))
 end
 
 ---@param name string
@@ -286,7 +335,7 @@ local function load(buf, target, opts)
   local handler = registry[kind]
   local ok, err = pcall(handler.load, buf, id, opts, done)
   if not ok then
-    done(tostring(err))
+    done(error_message(err))
   end
 end
 
@@ -355,16 +404,17 @@ end
 
 ---@param id integer
 ---@param done fun(kind?: shortcut.Kind, err?: string)
+---@return { cancel: fun(self: any) }? handle From the resolver, if it returned one.
 local function resolve(id, done)
   if kind_cache[id] then
     return done(kind_cache[id])
   end
   if not resolver then
-    -- No way to ask the API yet: assume a story.
+    -- No way to ask the API: assume a story.
     return done('story')
   end
   local current = resolver
-  local ok, err = pcall(current, id, function(kind, rerr)
+  local ok, handle = pcall(current, id, function(kind, rerr)
     main_loop(function()
       if kind and uri.is_kind(kind) and resolver == current then
         kind_cache[id] = kind
@@ -373,17 +423,44 @@ local function resolve(id, done)
     end)
   end)
   if not ok then
-    done(nil, tostring(err))
+    done(nil, error_message(handle))
+    return nil
   end
+  if type(handle) == 'table' and type(handle.cancel) == 'function' then
+    return handle
+  end
+  return nil
 end
 
---- Handle a temporary buffer for an object of unknown kind.
+--- Handle a temporary buffer for an object of unknown kind. If the buffer goes away before the
+--- lookup finishes, the lookup is cancelled and its outcome is not reported.
 ---@param alias integer
 ---@param id integer
 local function redirect_id(alias, id)
   prepare_alias(alias)
   vim.schedule(function()
-    resolve(id, function(kind, err)
+    if not vim.api.nvim_buf_is_loaded(alias) then
+      return
+    end
+    local handle ---@type { cancel: fun(self: any) }?
+    local finished = false
+    local autocmd = vim.api.nvim_create_autocmd('BufUnload', {
+      buffer = alias,
+      once = true,
+      desc = 'shortcut.nvim: cancel the sc-<id> lookup',
+      callback = function()
+        if not finished and handle then
+          pcall(handle.cancel, handle)
+        end
+      end,
+    })
+    handle = resolve(id, function(kind, err)
+      finished = true
+      pcall(vim.api.nvim_del_autocmd, autocmd)
+      if not vim.api.nvim_buf_is_loaded(alias) then
+        -- Closed meanwhile: nobody is waiting for it any more.
+        return
+      end
       if kind and uri.is_kind(kind) then
         replace(alias, kind, id)
         return
@@ -467,7 +544,7 @@ local function on_write(ev)
 
   local ok, err = pcall(handler.save, buf, id, { force = vim.v.cmdbang == 1 }, done)
   if not ok then
-    done(tostring(err))
+    done(error_message(err))
   end
 end
 

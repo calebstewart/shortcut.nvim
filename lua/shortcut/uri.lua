@@ -27,8 +27,10 @@ local KINDS = { story = true, epic = true }
 --- `#activity-<id>` is the best guess; keep any correction confined to this table.
 local COMMENT_FRAGMENTS = { '^activity%-(%d+)$' }
 
---- Largest ID accepted, so IDs stay exact integers.
-local MAX_ID = 2 ^ 53
+--- Largest ID accepted (2^53 - 1), so IDs stay exact integers. `shortcut.api` uses the same
+--- bound.
+M.MAX_ID = 2 ^ 53 - 1
+local MAX_ID = M.MAX_ID
 
 ---@param s string?
 ---@return integer?

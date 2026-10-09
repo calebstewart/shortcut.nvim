@@ -59,7 +59,7 @@ require('shortcut').setup({
   cli_config_path = nil,  -- override path to the `short` CLI's config.json
   cache = { ttl = 24 * 60 * 60 },  -- lookup-list cache lifetime (seconds)
   sc_ids = true,          -- allow `:e sc-<id>`
-  picker = { page_size = 25, max_results = 200 },
+  picker = { page_size = 25, max_results = 200 },  -- page_size: 1 to 250
   http = { timeout = 30 },  -- seconds
 })
 ```
@@ -108,8 +108,25 @@ users could see it with `ps`.
 ### Health check
 
 `:checkhealth shortcut` reports the Neovim and `curl` versions, where the token comes from (with
-only its last four characters shown), whether it works (by asking the API who you are), and
-whether snacks.nvim is installed.
+only its last four characters shown), whether it works (by asking the API who you are), what the
+lookup-list cache holds (see below), and whether snacks.nvim is installed.
+
+### Lookup-list cache
+
+Stories and epics refer to workflow states, members, labels, teams and iterations by ID. To show
+names (and turn names back into IDs when you edit), shortcut.nvim fetches these lists once and
+caches them, in memory and in `stdpath('cache')/shortcut/<workspace>/refs.json` (e.g.
+`~/.cache/nvim/shortcut/<workspace>/refs.json`). Each workspace has its own file, so switching
+tokens never mixes them up. After `cache.ttl` seconds (a day by default) a list is refetched in
+the background while the old copy keeps being used, so working offline never makes you wait; a
+failed refetch is retried after a minute. The file is readable only by you (it contains member names, but
+not the token or email addresses). `:checkhealth shortcut` shows how old each list is.
+
+To fetch everything again now (e.g. after adding a label), clear the cache:
+
+```lua
+require('shortcut.cache').clear()
+```
 
 ## Commands
 
@@ -128,9 +145,10 @@ Other ways of naming it switch to that buffer:
 - `:e https://app.shortcut.com/<workspace>/story/<id>/...` (or `/epic/<id>`): a link copied from
   the web app. Neovim's built-in download of `https://` files is skipped for these. A link to a
   workspace other than your token's opens with a warning.
-- `:e sc-<id>`: looked up as a story or epic. Turn this off with `sc_ids = false`. Names that
-  merely start with `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
-  `notes/sc-42`), and files that exist on disk open as normal files.
+- `:e sc-<id>`: looked up as a story, then as an epic (stories and epics share one ID space, so
+  an ID is never both). Turn this off with `sc_ids = false`. Names that merely start with
+  `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g. `notes/sc-42`), and files
+  that exist on disk open as normal files.
 - `gf` on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through `'includeexpr'`,
   which the plugin sets globally when it is empty, and chains onto the `gitcommit` ftplugin's
   own. Other filetypes that set their own (e.g. `lua`, `python`) can opt in from
@@ -144,7 +162,7 @@ After the switch, `<C-^>` returns to the buffer you came from.
 
 > [!NOTE]
 > Rendering is not implemented yet: the buffer only shows the object's kind and ID, and `:w`
-> reports that saving is not supported. For now `sc-<id>` always opens a story.
+> reports that saving is not supported.
 
 ## Development
 

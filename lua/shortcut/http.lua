@@ -45,7 +45,8 @@ local MAX_RETRY_AFTER = 60
 ---| 'http' # The API answered with a non-2xx status.
 ---| 'network' # curl failed (DNS, connection, TLS, timeout...): there is no status.
 ---| 'auth' # No usable token.
----| 'decode' # A 2xx response whose body is not valid JSON.
+---| 'decode' # A 2xx response whose body is not valid JSON, or not what was expected.
+---| 'invalid' # Not sent: the request's arguments are invalid (e.g. an empty search query).
 
 ---@class shortcut.http.Error
 ---@field kind shortcut.http.ErrorKind
@@ -381,6 +382,26 @@ function M.format_error(err)
     return ('%s: HTTP %d: %s'):format(where, err.status, err.message)
   end
   return ('%s: %s'):format(where, err.message)
+end
+
+--- Fail a request without sending it: `callback(err)` runs on the main loop (never
+--- synchronously), unless the returned handle is cancelled first. For API wrappers that reject
+--- invalid arguments the way a failed request would be reported.
+---@param method shortcut.http.Method
+---@param path string
+---@param message string
+---@param callback fun(err?: shortcut.http.Error, data?: any, response?: shortcut.http.Response)
+---@return shortcut.http.Handle
+function M.reject(method, path, message, callback)
+  local handle = new_handle()
+  ---@type shortcut.http.Error
+  local err = { kind = 'invalid', message = message, method = method, path = path }
+  vim.schedule(function()
+    if not handle._cancelled then
+      callback(err)
+    end
+  end)
+  return handle
 end
 
 ---@param s string

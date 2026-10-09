@@ -50,6 +50,7 @@ local function describe_source(resolved)
 end
 
 ---@param token string
+---@return string? url_slug The token's workspace, if the check got that far.
 local function check_token_works(token)
   local http = require('shortcut.http')
   local done, err, data = false, nil, nil
@@ -82,14 +83,16 @@ local function check_token_works(token)
   vim.health.ok(
     ('the token works: @%s in workspace %s'):format(identity.mention_name, identity.url_slug)
   )
+  return identity.url_slug
 end
 
+---@return string? url_slug The token's workspace, if known.
 local function check_token()
   local auth = require('shortcut.auth')
   local resolved, err = auth.resolve()
   if not resolved then
     vim.health.error('no usable API token', { err })
-    return
+    return nil
   end
   vim.health.ok(
     ('token %s from %s'):format(auth.redacted(resolved.token), describe_source(resolved))
@@ -99,7 +102,64 @@ local function check_token()
       ('saved identity: @%s in workspace %s'):format(resolved.mention_name, resolved.url_slug)
     )
   end
-  check_token_works(resolved.token)
+  return check_token_works(resolved.token) or resolved.url_slug
+end
+
+--- `3m`, `5h`, `2d`.
+---@param seconds integer
+---@return string
+local function age(seconds)
+  if seconds < 60 then
+    return 'just now'
+  elseif seconds < 3600 then
+    return ('%dm ago'):format(math.floor(seconds / 60))
+  elseif seconds < 86400 then
+    return ('%dh ago'):format(math.floor(seconds / 3600))
+  end
+  return ('%dd ago'):format(math.floor(seconds / 86400))
+end
+
+---@param current_slug? string
+local function check_cache(current_slug)
+  local cache = require('shortcut.cache')
+  vim.health.info('location: ' .. cache.root())
+  local workspaces = cache.disk_info()
+  if #workspaces == 0 then
+    vim.health.info('nothing cached yet')
+    return
+  end
+  local ttl = require('shortcut.config').get().cache.ttl
+  local now = cache._now()
+  for _, ws in ipairs(workspaces) do
+    local label = ('workspace %s%s'):format(
+      ws.slug,
+      current_slug and ws.slug == current_slug:lower() and ' (current)' or ''
+    )
+    if not ws.lists then
+      vim.health.warn(('%s: unreadable or corrupt, will be replaced: %s'):format(label, ws.path))
+    else
+      local lines = {}
+      for _, kind in ipairs(cache.KINDS) do
+        local list = ws.lists[kind]
+        if list then
+          local seconds = now - list.fetched_at
+          table.insert(
+            lines,
+            ('%s: %d %s, fetched %s%s'):format(
+              kind,
+              list.count,
+              list.count == 1 and 'entry' or 'entries',
+              age(math.max(seconds, 0)),
+              (seconds >= ttl or seconds < 0) and ' (expired)' or ''
+            )
+          )
+        else
+          table.insert(lines, kind .. ': not cached')
+        end
+      end
+      vim.health.ok(('%s: %s\n%s'):format(label, ws.path, table.concat(lines, '\n')))
+    end
+  end
 end
 
 local function check_snacks()
@@ -120,7 +180,10 @@ function M.check()
   check_curl()
 
   vim.health.start('API token')
-  check_token()
+  local slug = check_token()
+
+  vim.health.start('Lookup-list cache')
+  check_cache(slug)
 
   vim.health.start('Optional dependencies')
   check_snacks()

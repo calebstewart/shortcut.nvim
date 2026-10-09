@@ -110,6 +110,20 @@ T['parse()']['rejects non-strings'] = function()
   ---@diagnostic enable: param-type-mismatch
 end
 
+T['parse()']['accepts IDs up to 2^53 - 1, the bound the API modules use'] = function()
+  eq(uri.MAX_ID, 2 ^ 53 - 1)
+  eq(uri.parse('sc-9007199254740991'), { kind = 'id', id = 2 ^ 53 - 1 })
+  eq(uri.parse('sc-9007199254740992'), nil)
+  eq(uri.parse('shortcut://story/9007199254740992'), nil)
+  local api = require('shortcut.api')
+  expect.no_error(function()
+    api.check_id('id', uri.MAX_ID)
+  end)
+  expect.error(function()
+    api.check_id('id', uri.MAX_ID + 1)
+  end, 'positive integer')
+end
+
 T['canonical()'] = function()
   eq(uri.canonical('story', 123), 'shortcut://story/123')
   eq(uri.canonical('epic', 4), 'shortcut://epic/4')
