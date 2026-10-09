@@ -86,6 +86,15 @@ T['non-integer numbers are rejected'] = function()
   eq(setup({ cache = { ttl = 1.5 } }), false)
 end
 
+T['picker.page_size is at most 250, as the API allows'] = function()
+  eq(setup({ picker = { page_size = 250 } }), true)
+  eq(setup({ picker = { page_size = 251 } }), false)
+  expect.no_error(function()
+    assert(messages()[1].msg:find('integer from 1 to 250', 1, true))
+  end)
+  eq(get().picker.page_size, 250)
+end
+
 T['unknown keys warn but still apply the rest'] = function()
   eq(setup({ sc_idz = false, picker = { pagesize = 1 }, http = { timeout = 7 } }), true)
   local msgs = messages()

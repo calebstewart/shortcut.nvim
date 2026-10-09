@@ -242,6 +242,12 @@ T['search']['epics() takes options'] = function()
   eq(requests(), { { 'GET', BASE .. '/search/epics?detail=full&page_size=5&query=example' } })
 end
 
+T['search']['caps page_size at 250'] = function()
+  respond({ { status = 200, fixture = 'search_epics' } })
+  call('search', 'epics', 'x', { page_size = 1000 })
+  eq(requests()[1][2], BASE .. '/search/epics?detail=slim&page_size=250&query=x')
+end
+
 T['search']['uses config.picker.page_size'] = function()
   child.lua([[require('shortcut').setup({ picker = { page_size = 7 } })]])
   respond({ { status = 200, fixture = 'search_epics' } })
@@ -389,6 +395,26 @@ T['search']['stream()']['reports a failed page after the pages before it'] = fun
   eq(#r.pages, 1)
   eq(r.done.err.status, 400)
   eq(r.done.summary, { count = 2, total = 3, truncated = false })
+end
+
+T['search']['stream()']['stops if on_page raises an error, without calling on_done'] = function()
+  respond({
+    { status = 200, fixture = 'search_stories_1' },
+    { status = 200, fixture = 'search_stories_2' },
+  })
+  child.lua([[
+    _G.done = nil
+    _G.s = require('shortcut.api.search').stream('stories', 'example', nil, function()
+      error('boom')
+    end, function() _G.done = true end)
+    vim.wait(100)
+  ]])
+  eq(child.lua_get('_G.s:is_cancelled()'), true)
+  eq(child.lua_get('_G.done'), vim.NIL)
+  eq(#requests(), 1)
+  expect.no_error(function()
+    assert(child.cmd_capture('messages'):find('boom', 1, true))
+  end)
 end
 
 T['search']['stream()']['reports an empty query'] = function()

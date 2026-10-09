@@ -111,6 +111,6 @@
       "workflow_state_id": 501
     }
   ],
-  "next": "/api/v3/search/stories?query=example&page_size=2&detail=slim&next=a8acc6577548df7a213272f7f9f617bcb1f8a831~24",
+  "next": "/api/v3/search/stories?query=example&page_size=2&detail=slim&next=example-next-page-token",
   "total": 3
 }

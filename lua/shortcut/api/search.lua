@@ -20,10 +20,13 @@ local M = {}
 --- Results the API lets a search page through.
 M.MAX_RESULTS = 1000
 
+--- Largest `page_size` the API accepts.
+M.MAX_PAGE_SIZE = 250
+
 ---@alias shortcut.api.search.Kind 'stories'|'epics'
 
 ---@class shortcut.api.search.Opts
----@field page_size? integer Defaults to `config.picker.page_size`.
+---@field page_size? integer Defaults to `config.picker.page_size`; at most `MAX_PAGE_SIZE`.
 ---@field detail? 'slim'|'full' Defaults to `'slim'`.
 
 ---@class shortcut.api.search.Page
@@ -55,7 +58,7 @@ local function search(kind, query, opts, callback)
     path = path,
     query = {
       query = query,
-      page_size = opts.page_size or config.get().picker.page_size,
+      page_size = math.min(opts.page_size or config.get().picker.page_size, M.MAX_PAGE_SIZE),
       detail = opts.detail or 'slim',
     },
   }, callback)
@@ -156,7 +159,9 @@ end
 --- there is no `next` or `max_results` results have been delivered (the last page is cut to
 --- fit). Then `on_done(err, summary)`: `err` if a request failed (pages delivered before it
 --- stand). Cancel the returned stream to stop early, e.g. when a picker's query changes.
---- Callbacks run on the main loop; `on_page` may cancel the stream.
+--- Callbacks run on the main loop; `on_page` may cancel the stream. An error raised by `on_page`
+--- is a bug in the caller: it stops the stream and propagates as is (Neovim reports it), and
+--- `on_done` is not called.
 ---@param kind shortcut.api.search.Kind
 ---@param query string
 ---@param opts? shortcut.api.search.StreamOpts
@@ -210,7 +215,11 @@ function M.stream(kind, query, opts, on_page, on_done)
     end
     count = count + #items
     page = page + 1
-    on_page(items, { page = page, count = count, total = total })
+    local ok, page_err = pcall(on_page, items, { page = page, count = count, total = total })
+    if not ok then
+      stream._cancelled = true
+      error(page_err, 0)
+    end
     if stream._cancelled then
       return
     end

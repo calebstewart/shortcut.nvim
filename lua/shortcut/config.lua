@@ -17,7 +17,7 @@ local M = {}
 ---@field ttl integer Lookup-list cache lifetime, in seconds.
 
 ---@class shortcut.Config.Picker
----@field page_size integer Results requested per search page.
+---@field page_size integer Results requested per search page (the API allows 1 to 250).
 ---@field max_results integer Maximum results streamed into a picker.
 
 ---@class shortcut.Config.Http
@@ -50,7 +50,13 @@ local schema = {
   },
   sc_ids = { 'boolean' },
   picker = {
-    page_size = { positive_integer, false, 'positive integer' },
+    page_size = {
+      function(v)
+        return positive_integer(v) and v <= 250
+      end,
+      false,
+      'integer from 1 to 250',
+    },
     max_results = { positive_integer, false, 'positive integer' },
   },
   http = {
