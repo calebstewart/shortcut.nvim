@@ -27,6 +27,10 @@ printf '%s\n' "$@" | xargs -n 1 -P "$JOBS" sh -c '
   f=$1
   log="$out/$(printf %s "$f" | tr / _).log"
   t0=$(date +%s)
+  # A log file of its own (also for the child Neovims the tests start): Neovims starting at
+  # the same time with a fresh $HOME (as in the Nix sandbox) race to create the default log
+  # directory, and the losers warn that the log is "not accessible", which tests then see.
+  NVIM_LOG_FILE="$log.nvimlog" \
   "$NVIM_BIN" --headless --noplugin -u tests/minimal_init.lua \
     -c "lua MiniTest.run_file([==[$f]==])" >"$log" 2>&1 </dev/null
   rc=$?
