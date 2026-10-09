@@ -296,7 +296,8 @@ end
 ---@param buf integer
 ---@param target shortcut.uri.Target
 ---@param opts shortcut.buffer.LoadOpts
-local function load(buf, target, opts)
+---@param read? boolean Loading from `BufReadCmd` (`:e`, `:e!`), not reloading in the background.
+local function load(buf, target, opts, read)
   local kind, id =
     target.kind, --[[@as shortcut.Kind]]
     target.id
@@ -307,16 +308,26 @@ local function load(buf, target, opts)
   -- (e.g. `:doautocmd`, or `nvim_exec_autocmds()` for some plugin's User event).
   vim.bo[buf].modeline = false
   vim.b[buf].shortcut = { kind = kind, id = id }
-  -- Set even when it is already markdown, as filetype detection does on `:e!`: reloading drops
-  -- the buffer's highlighting (the treesitter highlighter detaches), and only FileType starts it
-  -- again (with the markdown ftplugin and any other FileType handlers).
-  vim.bo[buf].filetype = 'markdown'
 
   generation[buf] = (generation[buf] or 0) + 1
   local gen = generation[buf]
   load_state[buf] = 'loading'
 
+  -- Before the filetype is set, so that FileType handlers only see this placeholder and not the
+  -- previous server text: for a buffer not shown in the current tab they run in an autocommand
+  -- window, and with 'cpoptions' containing `S` entering that copies the global 'modeline' in
+  -- again. (Anything else that touches a hidden buffer through an autocommand window can turn it
+  -- back on as well; the BufEnter/BufWinEnter handler below only covers real windows.)
   set_lines(buf, { ('Loading sc-%d…'):format(id) })
+  -- A read sets the filetype even when it is already markdown, as filetype detection does for a
+  -- file: `:e!` drops the buffer's highlighting (the treesitter highlighter detaches), and only
+  -- FileType starts it again (with the markdown ftplugin and any other FileType handlers).
+  -- Background reloads only replace the lines, which keeps the highlighting.
+  if read or vim.bo[buf].filetype ~= 'markdown' then
+    vim.bo[buf].modeline = false
+    vim.bo[buf].filetype = 'markdown'
+    vim.bo[buf].modeline = false
+  end
   vim.bo[buf].modifiable = false
   vim.bo[buf].modified = false
 
@@ -545,7 +556,7 @@ local function on_read(ev)
   end
   local opts = pending[name] or {}
   pending[name] = nil
-  load(ev.buf, target, opts)
+  load(ev.buf, target, opts, true)
 end
 
 ---@param ev vim.api.keyset.create_autocmd.callback_args
