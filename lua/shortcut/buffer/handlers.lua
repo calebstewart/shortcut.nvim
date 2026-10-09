@@ -8,6 +8,10 @@
 --- How objects are loaded and saved is pluggable: renderers call `register()` for their kind.
 --- Stories are handled by `shortcut.buffer.story` and epics by `shortcut.buffer.epic`, each
 --- loaded on first use.
+---
+--- Drafts of new stories (`shortcut://story/new-<n>`, see `shortcut.buffer.story_create`) and
+--- comment buffers write themselves; reading a draft's name that `:Shortcut create` did not make
+--- is an error.
 local notify = require('shortcut.notify')
 local uri = require('shortcut.uri')
 
@@ -505,6 +509,17 @@ end
 
 ---@param ev vim.api.keyset.create_autocmd.callback_args
 local function on_read(ev)
+  local draft = uri.parse(ev.match)
+  if draft and draft.kind == 'draft' then
+    -- Never on Shortcut: only `:Shortcut create` makes drafts, and `:e!` resets one.
+    if vim.b[ev.buf].shortcut_draft ~= nil then
+      require('shortcut.buffer.story_create').reset(ev.buf)
+    else
+      prepare_alias(ev.buf)
+      notify.error(('%s is not a draft; :Shortcut create starts one'):format(ev.match))
+    end
+    return
+  end
   local is_comment, owned = comment_buffer(ev.buf, ev.match)
   if is_comment then
     -- Never a story: there is nothing to load.
@@ -528,7 +543,7 @@ local function on_read(ev)
     redirect_id(ev.buf, target.id)
     return
   end
-  local name = uri.canonical(target.kind, target.id)
+  local name = uri.canonical(target.kind --[[@as shortcut.Kind]], target.id)
   if name ~= ev.match then
     -- A non-canonical spelling, e.g. a leading zero.
     prepare_alias(ev.buf)
@@ -545,8 +560,9 @@ end
 ---@param ev vim.api.keyset.create_autocmd.callback_args
 local function on_write(ev)
   local buf = ev.buf
-  if vim.b[buf].shortcut_comment ~= nil then
-    -- A comment buffer, written to whatever name: its own BufWriteCmd posts it or refuses.
+  if vim.b[buf].shortcut_comment ~= nil or vim.b[buf].shortcut_draft ~= nil then
+    -- A comment buffer or a draft, written to whatever name: its own BufWriteCmd posts it or
+    -- refuses.
     return
   end
   local info = vim.b[buf].shortcut
@@ -752,11 +768,11 @@ end
 --- Open an object in the current window.
 ---@param kind shortcut.Kind
 ---@param id integer
----@param opts? { comment?: integer, workspace?: string }
+---@param opts? { comment?: integer, workspace?: string, keepalt?: boolean }
 function M.open(kind, id, opts)
   opts = opts or {}
   check_workspace(opts.workspace)
-  edit(kind, id, { comment = opts.comment })
+  edit(kind, id, { comment = opts.comment, keepalt = opts.keepalt })
 end
 
 --- Load a story or epic buffer again, as `:e!` does (discarding any changes). Does nothing for
@@ -772,7 +788,7 @@ function M.reload(buf)
   if
     not target
     or not uri.is_kind(target.kind)
-    or uri.canonical(target.kind, target.id) ~= name
+    or uri.canonical(target.kind --[[@as shortcut.Kind]], target.id) ~= name
   then
     return false
   end

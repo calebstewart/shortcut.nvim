@@ -586,6 +586,7 @@ end
 ---@field name? string Display name.
 ---@field url_slug string Workspace URL slug, as in `https://app.shortcut.com/<url_slug>/...`.
 ---@field workspace_name? string
+---@field default_workflow_id? integer The workspace's default workflow (`workspace2.default_workflow_id`).
 
 ---@param v any
 ---@return string?
@@ -618,6 +619,9 @@ function M.parse_identity(data)
     name = str(data.name),
     url_slug = url_slug,
     workspace_name = str(workspace.name),
+    default_workflow_id = type(workspace.default_workflow_id) == 'number'
+        and workspace.default_workflow_id
+      or nil,
   }
 end
 

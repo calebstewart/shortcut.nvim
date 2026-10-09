@@ -27,6 +27,10 @@ M.lazy = {
     desc = "Open a story by ID, sc-<id> or URL (default: the git branch's)",
   },
   epic = { module = 'shortcut.buffer.commands', desc = 'Open an epic by ID, sc-<id> or URL' },
+  create = {
+    module = 'shortcut.buffer.story_create',
+    desc = 'Create a story: open a draft, :w creates it',
+  },
   diff = {
     module = 'shortcut.buffer.story_save',
     desc = "Diff the story buffer against the server's version",

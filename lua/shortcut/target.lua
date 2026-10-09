@@ -54,6 +54,9 @@ function M.parse_arg(arg)
   if not target then
     return nil, ("invalid story reference '%s'"):format(arg)
   end
+  if target.kind == 'draft' then
+    return nil, ("'%s' is a draft: it is not on Shortcut until it is written (:w)"):format(arg)
+  end
   return target
 end
 

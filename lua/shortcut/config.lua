@@ -13,6 +13,7 @@ local M = {}
 ---@field picker shortcut.Config.Picker
 ---@field http shortcut.Config.Http
 ---@field tasks shortcut.Config.Tasks
+---@field create shortcut.Config.Create
 
 ---@class shortcut.Config.Cache
 ---@field ttl integer Lookup-list cache lifetime, in seconds.
@@ -28,6 +29,12 @@ local M = {}
 ---@field show_owners boolean Show task owners as a trailing ` · @mention ...` on task lines.
 ---@field confirm_delete boolean Ask before a save deletes tasks.
 
+--- Defaults of `:Shortcut create` (see `shortcut.buffer.story_create`).
+---@class shortcut.Config.Create
+---@field workflow? string|integer Workflow (name or ID) of new stories. Default: the team's default workflow if `team` is set, else the workspace's default workflow.
+---@field team? string Team (group) to assign new stories to, by name, mention name or ID.
+---@field template? fun(fields: shortcut.create.Fields): shortcut.create.Fields? Customizes the template's fields (it may change the table it is given, or return a new one).
+
 ---@type shortcut.Config
 local defaults = {
   token = nil,
@@ -37,6 +44,7 @@ local defaults = {
   picker = { page_size = 25, max_results = 200 },
   http = { timeout = 30 },
   tasks = { show_owners = true, confirm_delete = true },
+  create = { workflow = nil, team = nil, template = nil },
 }
 
 ---@param v any
@@ -71,6 +79,23 @@ local schema = {
   tasks = {
     show_owners = { 'boolean' },
     confirm_delete = { 'boolean' },
+  },
+  create = {
+    workflow = {
+      function(v)
+        return v == nil or (type(v) == 'string' and v ~= '') or positive_integer(v)
+      end,
+      true,
+      'workflow name or ID',
+    },
+    team = {
+      function(v)
+        return v == nil or (type(v) == 'string' and v ~= '')
+      end,
+      true,
+      'team name, mention name or ID',
+    },
+    template = { 'function', true },
   },
 }
 

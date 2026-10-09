@@ -167,6 +167,15 @@ T['kinds']['an epic link is not a story'] = function()
   eq(r.err, 'sc-6 is an epic; :Shortcut state works on stories')
 end
 
+T['kinds']['a draft is not a story yet'] = function()
+  local r = resolve([['shortcut://story/new-2']], [[{ command = 'comment' }]])
+  eq(
+    r.err,
+    "'shortcut://story/new-2' is a draft: it is not on Shortcut until it is written (:w)\n"
+      .. 'usage: :Shortcut comment [id | sc-<id> | url]'
+  )
+end
+
 T['kinds']['a bare ID is a story, unless epics are accepted'] = function()
   eq(resolve([['250']]).t.kind, 'story')
   eq(child.lua_get('_G.resolved'), {})

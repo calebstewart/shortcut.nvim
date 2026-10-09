@@ -487,6 +487,7 @@ T['whoami()']['parses GET /member'] = function()
       name = 'Jane Doe',
       url_slug = 'acme',
       workspace_name = 'Acme Corp',
+      default_workflow_id = 500000001,
     },
   })
   eq(requests()[1].url, 'https://api.app.shortcut.com/api/v3/member')

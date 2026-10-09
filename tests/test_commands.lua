@@ -62,8 +62,19 @@ end
 T['completion'] = new_set()
 
 T['completion']['lists subcommands'] = function()
-  local builtin =
-    { 'browse', 'comment', 'diff', 'epic', 'help', 'login', 'refresh', 'state', 'story', 'yank' }
+  local builtin = {
+    'browse',
+    'comment',
+    'create',
+    'diff',
+    'epic',
+    'help',
+    'login',
+    'refresh',
+    'state',
+    'story',
+    'yank',
+  }
   eq(complete('Shortcut '), builtin)
   add_fake_lazy()
   local with_fake = vim.list_extend({ 'fake' }, builtin)
