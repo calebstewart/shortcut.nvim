@@ -65,16 +65,23 @@ command and a few autocommands, and everything else is loaded on first use.
 
 Nix ~
 The flake provides the plugin as a package, `packages.<system>.default`, and
-through an overlay as `pkgs.vimPlugins.shortcut-nvim`: >nix
+through an overlay as `pkgs.vimPlugins.shortcut-nvim`. Add the input to your
+flake: >nix
+    # flake.nix
     {
       inputs.shortcut-nvim.url = "github:calebstewart/shortcut.nvim";
-
-      # In your NixOS or home-manager configuration:
-      nixpkgs.overlays = [ inputs.shortcut-nvim.overlays.default ];
+      # ...
     }
 <
-With home-manager: >nix
-    programs.neovim.plugins = [ pkgs.vimPlugins.shortcut-nvim ];
+Then, in your NixOS or home-manager configuration (with `inputs` passed to
+it, e.g. through `specialArgs` or `extraSpecialArgs`): >nix
+    { inputs, pkgs, ... }:
+    {
+      nixpkgs.overlays = [ inputs.shortcut-nvim.overlays.default ];
+
+      # home-manager
+      programs.neovim.plugins = [ pkgs.vimPlugins.shortcut-nvim ];
+    }
 <
 The package puts `curl` and `git` on the `PATH` of Neovim wrappers that add
 plugins' runtime dependencies. To try the plugin without installing anything
@@ -110,25 +117,29 @@ from the `short` config file when its token is the one in use; otherwise
 they are fetched once per session from the API.
 
                                                      *shortcut-token-function*
-Examples of a `token` function: >lua
+A `token` function that reads the token from a password manager's command
+line tool should fail when the command does, rather than return its error
+message as the token: >lua
+    --- The first line a command prints, or an error if it fails.
+    local function command_token(cmd)
+      local res = vim.system(cmd, { text = true }):wait()
+      if res.code ~= 0 then
+        error(('%s failed: %s'):format(cmd[1], vim.trim(res.stderr or '')))
+      end
+      return vim.trim(vim.split(res.stdout or '', '\n')[1])
+    end
+
+    require('shortcut').setup({
+      token = function()
+        return command_token({ 'pass', 'show', 'shortcut/api-token' })
+      end,
+    })
+<
+Other password managers only need another command: >lua
     -- macOS Keychain
-    token = function()
-      return vim.trim(vim.fn.system({
-        'security', 'find-generic-password', '-s', 'shortcut-api-token', '-w',
-      }))
-    end,
-
+    { 'security', 'find-generic-password', '-s', 'shortcut-api-token', '-w' }
     -- 1Password CLI
-    token = function()
-      return vim.trim(vim.fn.system({
-        'op', 'read', 'op://Private/Shortcut/token',
-      }))
-    end,
-
-    -- pass
-    token = function()
-      return vim.trim(vim.fn.system({ 'pass', 'show', 'shortcut/api-token' }))
-    end,
+    { 'op', 'read', 'op://Private/Shortcut/token' }
 <
 If the function raises an error or returns something other than a non-empty
 string, commands report that (without a stack trace) and send nothing.
@@ -183,9 +194,10 @@ cache.ttl ~
                                                       *shortcut-config.sc_ids*
 sc_ids ~
   `boolean`, default `true`.
-  Whether `:e sc-<id>` opens the story or epic (|shortcut-sc-ids|). Set it to
-  `false` if you have files named like `sc-123` that you edit without a
-  directory, or don't want the lookups.
+  Whether `:e sc-<id>`, and |gf| on `sc-<id>`, open the story or epic
+  (|shortcut-sc-ids|, |shortcut-gf|). Set it to `false` if you have files
+  named like `sc-123` that you edit without a directory, or don't want the
+  lookups. Links and |:Shortcut-story| work either way.
 
                                             *shortcut-config.picker.page_size*
 picker.page_size ~
@@ -247,8 +259,10 @@ create.template ~
 
                                                                    *:Shortcut*
 :Shortcut {subcommand} [args]
-    The plugin's only command. Subcommands and their arguments are completed
-    with <Tab>. Without a subcommand, lists the subcommands.
+    The plugin's only command. Subcommand names are completed with <Tab>, and
+    so are the arguments of |:Shortcut-state| (state names) and
+    |:Shortcut-create| (keys and values). Without a subcommand, lists the
+    subcommands.
 
                                                              *:Shortcut-story*
 :Shortcut story [{id} | sc-{id} | {url}]
@@ -364,8 +378,9 @@ afterwards CTRL-^ returns to the buffer you came from.
   a link copied from the web app. Neovim's built-in download of `https://`
   files (|shortcut-net-handler|) is skipped for these. A link to a workspace
   other than your token's opens with a warning (|shortcut-workspaces|). A
-  link to a comment (`.../story/<id>/<slug>#activity-<comment id>`) puts the
-  cursor on it.
+  link ending in `#activity-<comment id>` puts the cursor on that comment.
+  (This is assumed to be the web app's format for comment links; it has not
+  been confirmed. Any other fragment is ignored and opens the story.)
                                                              *shortcut-sc-ids*
 - `:e sc-<id>`: looked up as a story, then as an epic (stories and epics share
   one ID space, so an ID is never both); the answer is remembered. Turn this
@@ -373,7 +388,8 @@ afterwards CTRL-^ returns to the buffer you came from.
   `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
   `notes/sc-42`), and files that exist on disk open as normal files.
                                                                  *shortcut-gf*
-- |gf| on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through
+- |gf| on a Shortcut link or on `sc-<id>` (the latter unless
+  |shortcut-config.sc_ids| is `false`). For `sc-<id>` this works through
   'includeexpr', which the plugin sets globally when it is empty, and chains
   onto the `gitcommit` filetype plugin's own. Other filetypes that set their
   own (e.g. `lua`, `python`) can opt in from `after/ftplugin/<filetype>.lua`;
@@ -381,7 +397,11 @@ afterwards CTRL-^ returns to the buffer you came from.
     require('shortcut').chain_includeexpr()
 <
 ==============================================================================
-7. STORY BUFFERS                                       *shortcut-story-buffer*
+7. STORY BUFFERS                    *shortcut-buffers* *shortcut-story-buffer*
+
+Stories, epics, drafts and comments are buffers with `shortcut://` names: see
+|shortcut-story-buffer| (here), |shortcut-editing|, |shortcut-create|,
+|shortcut-comment-float| and |shortcut-epic-buffer|.
 
 A story opens as a Markdown buffer (filetype `markdown`; both Neovim's
 Markdown syntax and its treesitter highlighting show the header as YAML):
@@ -510,8 +530,9 @@ description            the text between the title and the tasks marker, as
 task lines             see |shortcut-task-editing|
 
 `id` and `url` are read-only: changing them is an error. Comments are
-read-only; edits below the comments marker are ignored (and undone by the
-reload).
+read-only: edits below the comments marker are never sent, and `:w` puts them
+back as they were (with the reload after a save, or, when nothing else
+changed, by restoring that section; |u| brings your text back).
 
                                                          *shortcut-validation*
 Every value is checked before anything is sent. Problems (an unknown state,
@@ -670,8 +691,9 @@ or whose answer didn't come (it may still have been posted), is saved under
 ==============================================================================
 11. EPIC BUFFERS                                        *shortcut-epic-buffer*
 
-An epic opens as a read-only Markdown buffer listing its stories, grouped by
-workflow state: >markdown
+An epic opens as a Markdown buffer listing its stories, grouped by workflow
+state. Epics can't be saved from Neovim (see the end of this section):
+>markdown
     ---
     id: 678
     state: In Progress
@@ -715,8 +737,10 @@ workflow state: >markdown
   <CR> does what it did before: the <CR> mapping it replaced (buffer-local,
   e.g. from a Markdown plugin, or global), else Neovim's own <CR>. |gf| on
   `sc-<id>` works too, as everywhere.
-- `:e!` fetches the epic and its stories again. Editing is not available:
-  `:w` says so and keeps your changes in the buffer.
+- `:e!` fetches the epic and its stories again. Saving is not available:
+  the buffer can be edited (e.g. to jot notes or copy lines), but `:w` says
+  it can't be saved, sends nothing, and keeps your changes in the buffer;
+  `:e!` discards them.
 
 ==============================================================================
 12. PICKERS                                                 *shortcut-pickers*
@@ -877,8 +901,9 @@ can't be read with your token. Use a token for that workspace
                                                          *shortcut-sc-ids-off*
 If `:e sc-<id>` gets in your way (e.g. you edit files named `sc-123` in the
 current directory without a path: those that exist on disk open as files
-anyway), turn it off with `sc_ids = false` (|shortcut-config.sc_ids|).
-`:Shortcut story sc-123` still works.
+anyway), turn it off with `sc_ids = false` (|shortcut-config.sc_ids|). That
+also turns off |gf| on `sc-<id>`; `:Shortcut story sc-123` and links still
+work.
 
                                                         *shortcut-net-handler*
 Neovim 0.12 downloads `http://` and `https://` names given to `:edit` in the

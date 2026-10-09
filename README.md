@@ -113,7 +113,7 @@ require('shortcut').setup({
 | `token` | `nil` | API token, or a function returning one (see [Authentication](#authentication)). Takes precedence over the environment and the `short` config |
 | `cli_config_path` | `nil` | The `short` config file to read the token from and that `:Shortcut login` writes; by default the one `short` uses |
 | `cache.ttl` | `86400` | Seconds before a [lookup list](#lookup-list-cache) is fetched again (in the background) |
-| `sc_ids` | `true` | Whether `:e sc-<id>` opens the story or epic |
+| `sc_ids` | `true` | Whether `:e sc-<id>` and `gf` on `sc-<id>` open the story or epic (links work either way) |
 | `picker.page_size` | `25` | Results per search request (1 to 250) |
 | `picker.max_results` | `200` | Most results a picker loads (the API stops at 1000) |
 | `http.timeout` | `30` | Seconds a request may take |
@@ -136,9 +136,19 @@ places, in order, and uses the first token it finds:
    per Neovim session, so it can fetch the token from a password manager:
 
    ```lua
+   --- The first line a command prints, or an error if it fails (rather than its error message
+   --- being used as the token).
+   local function command_token(cmd)
+     local res = vim.system(cmd, { text = true }):wait()
+     if res.code ~= 0 then
+       error(('%s failed: %s'):format(cmd[1], vim.trim(res.stderr or '')))
+     end
+     return vim.trim(vim.split(res.stdout or '', '\n')[1])
+   end
+
    require('shortcut').setup({
      token = function()
-       return vim.trim(vim.fn.system({ 'pass', 'show', 'shortcut/api-token' }))
+       return command_token({ 'pass', 'show', 'shortcut/api-token' })
      end,
    })
    ```
@@ -357,7 +367,7 @@ Other ways of naming it switch to that buffer:
   the web app. Neovim's built-in download of `https://` files is skipped for these. A link to a
   workspace other than your token's opens with a warning.
 - `:e sc-<id>`: looked up as a story, then as an epic (stories and epics share one ID space, so
-  an ID is never both). Turn this off with `sc_ids = false`. Names that merely start with
+  an ID is never both). Turn this off (and `gf` on `sc-<id>`) with `sc_ids = false`. Names that merely start with
   `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g. `notes/sc-42`), and files
   that exist on disk open as normal files.
 - `gf` on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through `'includeexpr'`,
@@ -448,7 +458,9 @@ Description…
   description itself contains such a line, the **last** comments marker and the last tasks
   marker before it are the real ones.
 - Modelines are disabled in these buffers, so text from the server can never set options.
-- A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
+- A link ending in `#activity-<comment id>` puts the cursor on that comment. (This is assumed to be
+  the web app's format for comment links; it has not been confirmed. Any other fragment is
+  ignored.)
 - `:e!` fetches the story again, discarding your edits.
 
 ### Editing stories
@@ -470,8 +482,10 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
 | `labels` | names of **existing** labels (case is ignored); an unknown name is an error, never a new label |
 | task lines | see below |
 
-- `id` and `url` are read-only: changing them is an error. Comments are read-only; edits below
-  the comments marker are ignored (and undone by the reload).
+- `id` and `url` are read-only: changing them is an error. Comments are read-only: edits below
+  the comments marker are never sent, and `:w` puts them back as they were (with the reload
+  after a save, or, when nothing else changed, by restoring that section; `u` brings your
+  text back).
 - Every value is checked before anything is sent. Problems (an unknown state, member, label or
   iteration, an epic that doesn't exist, a malformed line…) are shown as diagnostics on their
   lines, with one summary message, and **nothing** is sent until they are fixed. Names are
@@ -591,7 +605,8 @@ Writing a draft:
 
 ## Epic buffers
 
-An epic opens as a read-only Markdown buffer listing its stories, grouped by workflow state:
+An epic opens as a Markdown buffer listing its stories, grouped by workflow state. Epics can't
+be saved from Neovim (see the end of this section):
 
 ```markdown
 ---
@@ -643,8 +658,9 @@ Description…
   too, as everywhere.
 - Modelines are disabled, as in story buffers.
 - Epics have no file attachments to show: the API's `Epic` has no `files` (only stories do).
-- `:e!` fetches the epic and its stories again. Editing (`:w`) is not available: it reports
-  so and keeps your changes in the buffer.
+- `:e!` fetches the epic and its stories again. Saving is not available: the buffer can be
+  edited (e.g. to jot notes or copy lines), but `:w` says it can't be saved, sends nothing, and
+  keeps your changes in the buffer; `:e!` discards them.
 
 ## Troubleshooting
 
@@ -660,8 +676,8 @@ Description…
   workspace opens with a warning, and the story is usually "not found", since your token can't
   read it. Use a token for that workspace.
 - **`sc-<id>` gets in the way** (e.g. files named `sc-123` that you open without a path; those
-  that exist on disk open as files anyway): set `sc_ids = false`. `:Shortcut story sc-123`
-  still works.
+  that exist on disk open as files anyway): set `sc_ids = false`. That also turns off `gf` on
+  `sc-<id>`; `:Shortcut story sc-123` and links still work.
 - **Neovim's built-in `https://` handler.** Neovim 0.12 downloads `http(s)://` names given to
   `:edit` in the background (the `nvim.net.remotefile` autocommands), which would replace a
   story with the web app's login page. shortcut.nvim wraps those handlers at startup so they skip

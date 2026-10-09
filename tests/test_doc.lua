@@ -128,11 +128,32 @@ T['lines fit in 78 columns'] = function()
   eq(long, {})
 end
 
+T['has the tags issue #13 asks for'] = function()
+  local tags = helptags()
+  local missing = {}
+  for _, tag in ipairs({
+    'shortcut',
+    'shortcut-config',
+    'shortcut-buffers',
+    'shortcut-commands',
+    'shortcut-pickers',
+    'shortcut-troubleshooting',
+    ':Shortcut',
+    ':Shortcut-search',
+  }) do
+    if not tags[tag] then
+      table.insert(missing, tag)
+    end
+  end
+  eq(missing, {})
+end
+
 T['the README lists every subcommand'] = function()
   local readme = table.concat(vim.fn.readfile('README.md'), '\n')
   local missing = {}
   for _, name in ipairs(require('shortcut.commands').names()) do
-    if not readme:find('`:Shortcut ' .. name, 1, true) then
+    -- The whole word: `:Shortcut epics` doesn't count for `epic`.
+    if not readme:find('`:Shortcut ' .. vim.pesc(name) .. '[`%s]') then
       table.insert(missing, name)
     end
   end
