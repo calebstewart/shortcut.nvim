@@ -44,6 +44,9 @@ M.lazy = {
     module = 'shortcut.actions',
     desc = 'Fetch the lookup lists again and reload the current Shortcut buffer',
   },
+  search = { module = 'shortcut.picker', desc = 'Search stories (live with snacks.nvim)' },
+  mine = { module = 'shortcut.picker', desc = 'Your unfinished stories' },
+  epics = { module = 'shortcut.picker', desc = 'Search epics (live with snacks.nvim)' },
 }
 
 ---@type table<string, shortcut.Subcommand>

@@ -68,9 +68,12 @@ T['completion']['lists subcommands'] = function()
     'create',
     'diff',
     'epic',
+    'epics',
     'help',
     'login',
+    'mine',
     'refresh',
+    'search',
     'state',
     'story',
     'yank',
@@ -81,7 +84,7 @@ T['completion']['lists subcommands'] = function()
   table.sort(with_fake)
   eq(complete('Shortcut '), with_fake)
   eq(complete('Shortcut h'), { 'help' })
-  eq(complete('Shortcut s'), { 'state', 'story' })
+  eq(complete('Shortcut s'), { 'search', 'state', 'story' })
   eq(complete('Shortcut! f'), { 'fake' })
 end
 

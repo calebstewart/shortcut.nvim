@@ -140,6 +140,9 @@ To fetch everything again now (e.g. after adding a label), run `:Shortcut refres
 |---|---|
 | `:Shortcut story [id \| sc-<id> \| url]` | Open a story; without an argument, the git branch's story |
 | `:Shortcut epic {id \| sc-<id> \| url}` | Open an epic |
+| `:Shortcut search [query…]` | Search stories (live with snacks.nvim); see [Searching](#searching) |
+| `:Shortcut mine` | Your unfinished stories |
+| `:Shortcut epics [query…]` | Search epics (live with snacks.nvim) |
 | `:Shortcut create [key=value...]` | Open a draft of a new story; `:w` creates it (see [Creating stories](#creating-stories)) |
 | `:Shortcut comment [target]` | Write a comment on the story in a floating window; `:w` posts it |
 | `:Shortcut state [target] [state]` | Move the story to another workflow state |
@@ -193,6 +196,76 @@ bare ID is looked up to find out which it is).
 - **`:Shortcut refresh`** clears the [lookup-list cache](#lookup-list-cache) (in memory and on
   disk) and fetches the lists again in the background. If the current buffer is a story or epic
   without unsaved changes, it is reloaded too.
+
+## Searching
+
+- **`:Shortcut search [query…]`** searches stories. The arguments are joined into the starting
+  query; with [snacks.nvim](https://github.com/folke/snacks.nvim), every change to the query
+  searches again (the request in flight is cancelled). With no query, nothing is shown until
+  you type one (Shortcut rejects empty searches).
+- **`:Shortcut mine`** lists your unfinished stories: `owner:<your mention name> !is:done
+  !is:archived`. Typing filters this list locally instead of searching again.
+- **`:Shortcut epics [query…]`** searches epics. With no query it starts with
+  `!is:done !is:archived` (not-done epics), which you can edit.
+
+Queries use Shortcut's
+[search operators](https://www.shortcut.com/help/fields-and-features/search-operators), as in
+the web app, e.g. `owner:someone state:"In Progress" epic:123 type:bug`. Operators combine with
+AND, and `!` or `-` in front of one negates it (`!is:done`). Results arrive a page at a time
+(`picker.page_size` per request), up to `picker.max_results` (the API stops at 1000).
+
+### With snacks.nvim
+
+Each row shows `sc-<id>`, the workflow state (coloured by its type: backlog, unstarted, started,
+done; states of other types are not coloured), the story type (`feat`, `bug`, `chore`), the
+title, and the owners (dimmed). Epic rows show the ID, state and name.
+
+The preview shows the story or epic as its buffer would, with modelines off. It is fetched once
+the cursor has rested on a row for 300 ms, so moving through the list doesn't fetch every row,
+and at most 40 previews are fetched per minute (past that the preview says it is waiting), well
+within the API's limit of 200 requests per minute. Previews are cached for 5 minutes; any change
+made from Neovim (saving a buffer, `:Shortcut state`, a comment…), `:Shortcut refresh`, or
+loading the object's buffer drops them sooner.
+
+The web link used by the copy and browse keys is the result's own link only if it is a Shortcut
+web app link to that same story or epic; otherwise it is built from your workspace, as
+`:Shortcut yank` does.
+
+| Key | Action |
+|---|---|
+| `<CR>` | Open the story/epic (`shortcut://<kind>/<id>`) in the current window; with several selected (`<Tab>`), open each |
+| `<C-s>` / `<C-v>` / `<C-t>` | Open in a split / vertical split / new tab (snacks' defaults) |
+| `<C-y>` (input), `y` (list) | Copy the web link, like `:Shortcut yank` (unnamed register and clipboard) |
+| `<A-b>` | Open the web link in the browser (`vim.ui.open()`) |
+
+These follow snacks' own GitHub pickers, which use the same keys to copy and browse. Every other
+snacks key works as usual (`<C-g>` toggles live search off to filter the results locally).
+
+The pickers are snacks sources named `shortcut_search`, `shortcut_mine` and `shortcut_epics`;
+settings under `picker.sources.<name>` in your snacks configuration apply on top of the
+plugin's, e.g. to change keys or the layout:
+
+```lua
+require('snacks').setup({
+  picker = {
+    sources = {
+      shortcut_search = { layout = 'vertical', win = { list = { keys = { ['<c-o>'] = 'shortcut_browse' } } } },
+    },
+  },
+})
+```
+
+The highlight groups are `ShortcutId`, `ShortcutStateBacklog`, `ShortcutStateUnstarted`,
+`ShortcutStateStarted`, `ShortcutStateDone`, `ShortcutStateOther`, `ShortcutTypeFeature`,
+`ShortcutTypeBug`, `ShortcutTypeChore` and `ShortcutOwners`; each links to a standard group
+unless you define it.
+
+### Without snacks.nvim
+
+The commands still work, without live search or previews (an info message says so once per
+session): `vim.ui.input` asks for the query if none was given (not for `mine`; for `epics` it
+suggests the default), the first results (up to `picker.max_results`) are fetched, and
+`vim.ui.select` lists them as `sc-<id> [state] title`. Choosing one opens its buffer.
 
 ## Opening stories and epics
 
@@ -487,7 +560,7 @@ build, only sees files tracked by git.)
 Without Nix:
 
 ```sh
-make test            # clones mini.nvim into deps/ on first run
+make test            # fetches mini.nvim and snacks.nvim (pinned; picker tests skip offline) into deps/
 make test-file FILE=tests/test_config.lua
 make fmt             # requires stylua
 ```

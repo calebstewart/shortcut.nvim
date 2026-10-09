@@ -40,3 +40,6 @@ jobs:
           version: ${{ matrix.nvim }}
       - name: Run tests
         run: make test
+        env:
+          # Fail rather than skip the picker tests if snacks.nvim can't be fetched.
+          REQUIRE_SNACKS: 1
