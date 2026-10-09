@@ -43,13 +43,8 @@ local function describe_source(resolved)
   if resolved.source == 'setup' then
     return 'the `token` option of setup()'
   elseif resolved.source == 'env' then
-    for _, name in ipairs(auth.ENV_VARS) do
-      local v = vim.uv.os_getenv(name)
-      if v and vim.trim(v) == resolved.token then
-        return '$' .. name
-      end
-    end
-    return 'the environment'
+    local name = auth.env_var(resolved)
+    return name and ('$' .. name) or 'the environment'
   end
   return 'the `short` CLI config ' .. auth.cli_config_path()
 end

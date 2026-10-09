@@ -201,6 +201,57 @@ T['other workspace']['does not ask when the saved token is invalid'] = function(
   eq(read_config().token, NEW_TOKEN)
 end
 
+T['other workspace']['asks when the saved token cannot be checked'] = function()
+  write_config({ token = OLD_TOKEN, other = 1 })
+  child.lua(
+    [[
+    local new, old = ...
+    _G.members[new] = 'member'
+    local route = _G.routes
+    _G.routes = function(req)
+      if vim.tbl_contains(req.headers, 'Shortcut-Token: ' .. old) then
+        return { error = 'Could not resolve host: api.app.shortcut.com' }
+      end
+      return route(req)
+    end
+    _G.confirm_answer = 2
+  ]],
+    { NEW_TOKEN, OLD_TOKEN }
+  )
+  login()
+  eq(read_config(), { token = OLD_TOKEN, other = 1 })
+  local confirms = child.lua_get('_G.confirms')
+  eq(#confirms, 1)
+  eq(confirms[1]:find('Cannot tell which workspace the saved token is for', 1, true) ~= nil, true)
+  eq(confirms[1]:find('Could not resolve host', 1, true) ~= nil, true)
+  assert_no_token_in_messages()
+
+  -- Confirming replaces it.
+  child.lua('_G.confirm_answer = 1; _G.messages = {}')
+  login()
+  eq(read_config().token, NEW_TOKEN)
+end
+
+T['other workspace']['asks when the saved token gets a server error'] = function()
+  write_config({ token = OLD_TOKEN })
+  child.lua(
+    [[
+    local new, old = ...
+    _G.members[new] = 'member'
+    local route = _G.routes
+    _G.routes = function(req)
+      if vim.tbl_contains(req.headers, 'Shortcut-Token: ' .. old) then return { status = 503 } end
+      return route(req)
+    end
+    _G.confirm_answer = 2
+  ]],
+    { NEW_TOKEN, OLD_TOKEN }
+  )
+  login()
+  eq(read_config(), { token = OLD_TOKEN })
+  eq(#child.lua_get('_G.confirms'), 1)
+end
+
 T['warns when an environment token takes precedence'] = function()
   child.lua('vim.env.SHORTCUT_API_TOKEN = "env-token-aaaa-bbbb-cccc-dddd"')
   child.lua('_G.members[...] = "member"', { NEW_TOKEN })
@@ -219,6 +270,14 @@ T['refuses to overwrite a malformed config'] = function()
   login()
   eq(vim.fn.readfile(config_file()), { '{ not json' })
   eq(messages()[1].level, vim.log.levels.ERROR)
+end
+
+T['names $CLUBHOUSE_API_TOKEN when that is what takes precedence'] = function()
+  child.lua('vim.env.CLUBHOUSE_API_TOKEN = "env-token-aaaa-bbbb-cccc-dddd"')
+  child.lua('_G.members[...] = "member"', { NEW_TOKEN })
+  login()
+  local msgs = messages()
+  eq(msgs[2].msg:find('$CLUBHOUSE_API_TOKEN takes precedence', 1, true) ~= nil, true)
 end
 
 return T

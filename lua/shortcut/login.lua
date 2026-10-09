@@ -7,10 +7,17 @@ local notify = require('shortcut.notify')
 
 local M = {}
 
-local SOURCES = {
-  setup = 'the `token` passed to setup()',
-  env = 'the token in the environment ($SHORTCUT_API_TOKEN)',
-}
+--- What supplies the token in use, if not the `short` config.
+---@param resolved shortcut.auth.Result
+---@return string?
+local function overriding_source(resolved)
+  if resolved.source == 'setup' then
+    return 'the `token` passed to setup()'
+  elseif resolved.source == 'env' then
+    return ('$%s'):format(auth.env_var(resolved) or 'SHORTCUT_API_TOKEN')
+  end
+  return nil
+end
 
 ---@param v any
 ---@return string?
@@ -21,23 +28,31 @@ local function nonempty(v)
   return nil
 end
 
---- The workspace the stored token belongs to, if it can be told: from the file, or else by
---- asking the API. Must run inside `async.run()`.
+--- The workspace the stored token belongs to: from the file, or else by asking the API. Must
+--- run inside `async.run()`.
 ---@param existing table
 ---@param old_token string
----@return string?
+---@return string? slug
+---@return boolean rejected `true` if the API rejected the stored token (HTTP 401).
+---@return string? why Why the workspace is unknown, if it is.
 local function stored_workspace(existing, old_token)
   local slug = nonempty(existing.urlSlug)
   if slug then
-    return slug
+    return slug, false
   end
   local err, data =
     async.await(http.request, { path = '/member', token = old_token, retry = false })
   if err then
-    return nil
+    return nil, err.status == 401, http.format_error(err)
   end
-  local identity = http.parse_identity(data)
-  return identity and identity.url_slug
+  local identity, parse_err = http.parse_identity(data)
+  return identity and identity.url_slug, false, parse_err
+end
+
+---@param msg string
+---@return boolean
+local function confirm(msg)
+  return vim.fn.confirm(msg, '&Replace\n&Cancel', 2) == 1
 end
 
 --- Check `token` and, if it works, save it. Must run inside `async.run()`.
@@ -61,20 +76,24 @@ local function save(token)
   end
   local old_token = existing and nonempty(existing.token)
   if existing and old_token and old_token ~= token then
-    local old_slug = stored_workspace(existing, old_token)
+    local old_slug, rejected, why = stored_workspace(existing, old_token)
+    local question
     if old_slug and old_slug:lower() ~= identity.url_slug:lower() then
-      local choice = vim.fn.confirm(
-        ("The saved token is for workspace '%s'; this one is for '%s'. Replace it?"):format(
-          old_slug,
-          identity.url_slug
-        ),
-        '&Replace\n&Cancel',
-        2
+      question = ("The saved token is for workspace '%s'; this one is for '%s'. Replace it?"):format(
+        old_slug,
+        identity.url_slug
       )
-      if choice ~= 1 then
-        notify.info('login cancelled; the saved token was kept')
-        return
-      end
+    elseif not old_slug and not rejected then
+      -- Unknown (e.g. offline): it may be another workspace's. Only a token the API rejected
+      -- is safe to replace without asking.
+      question = ("Cannot tell which workspace the saved token is for (%s). Replace it with this one for '%s'?"):format(
+        why or 'unknown error',
+        identity.url_slug
+      )
+    end
+    if question and not confirm(question) then
+      notify.info('login cancelled; the saved token was kept')
+      return
     end
   end
 
@@ -91,17 +110,19 @@ local function save(token)
   notify.info(('Logged in as @%s (%s)'):format(identity.mention_name, identity.url_slug))
 
   local resolved = auth.resolve()
-  if resolved and SOURCES[resolved.source] then
+  local source = resolved and overriding_source(resolved)
+  if source then
     notify.warn(
       ('the token was saved to %s, but %s takes precedence over it'):format(
         auth.cli_config_path(),
-        SOURCES[resolved.source]
+        source
       )
     )
   end
 end
 
 --- Run `:Shortcut login`.
+---@return shortcut.async.Task?
 function M.login()
   local ok, input = pcall(vim.fn.inputsecret, 'Shortcut API token: ')
   -- Clear the prompt line; the input is not echoed anyway.
@@ -111,7 +132,7 @@ function M.login()
     notify.warn('login cancelled')
     return
   end
-  async.run(function()
+  return async.run(function()
     save(token)
   end)
 end

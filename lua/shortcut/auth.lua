@@ -275,6 +275,21 @@ function M.resolve()
   return copy
 end
 
+--- The environment variable a token resolved from the environment came from.
+---@param result shortcut.auth.Result
+---@return string? name E.g. `SHORTCUT_API_TOKEN`; `nil` unless `result.source` is `'env'`.
+function M.env_var(result)
+  if result.source ~= 'env' then
+    return nil
+  end
+  for _, name in ipairs(M.ENV_VARS) do
+    if nonempty_string(env(name)) == result.token then
+      return name
+    end
+  end
+  return nil
+end
+
 --- Forget the resolved token, so the next `resolve()` looks it up again.
 function M.reset()
   cache, cache_config = nil, nil

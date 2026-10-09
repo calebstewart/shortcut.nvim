@@ -46,6 +46,13 @@ T['reports a working token'] = function()
   eq(req.timeout, 10)
 end
 
+T['names $CLUBHOUSE_API_TOKEN as the source'] = function()
+  child.lua('vim.env.CLUBHOUSE_API_TOKEN = ...', { TOKEN })
+  child.lua([[_G.responses = { { status = 200, fixture = 'member' } }]])
+  local report = checkhealth()
+  has(report, 'token ****wxyz from $CLUBHOUSE_API_TOKEN')
+end
+
 T['reports a token that does not work'] = function()
   child.lua('vim.env.SHORTCUT_API_TOKEN = ...', { TOKEN })
   child.lua([[_G.responses = { { status = 401, body = '{"message": "Unauthorized"}' } }]])
