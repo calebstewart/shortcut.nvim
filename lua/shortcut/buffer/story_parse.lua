@@ -15,6 +15,8 @@
 --- - The tasks section holds `- [ ] description · @owner @owner` lines, blank lines and its
 ---   `## Tasks` heading; anything else is an error. Everything below the comments marker is
 ---   ignored.
+--- - A new story's draft (`opts.draft`) has the header fields `story.DRAFT_FIELDS` and no
+---   comments section: its tasks run to the last line.
 ---
 --- Names are not resolved here (see `shortcut.buffer.story_diff`). Every problem found is
 --- returned, with its line, rather than only the first one.
@@ -67,7 +69,8 @@ M.MAX_TASK = 2048
 
 ---@class shortcut.story_parse.Opts
 ---@field show_owners? boolean Task owners are shown (default `true`). When not, the whole text after the checkbox is the description.
----@field fields? string[] Header keys (default `story.FIELDS`).
+---@field fields? string[] Header keys (default `story.FIELDS`, or `story.DRAFT_FIELDS` for a draft).
+---@field draft? boolean A new story's draft (`shortcut.buffer.story_create`): no comments section (the tasks run to the end), and nothing to reload with `:e!`.
 
 --- Number of characters of a UTF-8 string.
 ---@param s string
@@ -242,7 +245,10 @@ function M.parse(lines, opts)
   vim.validate('lines', lines, 'table')
   opts = opts or {}
   local show_owners = opts.show_owners ~= false
-  local keys = opts.fields or story.FIELDS
+  local draft = opts.draft == true
+  local keys = opts.fields or (draft and story.DRAFT_FIELDS or story.FIELDS)
+  -- How to get back what is missing.
+  local restore = draft and 'add it back' or ':e! reloads the story'
   local errors = {} ---@type shortcut.story_parse.Error[]
 
   local fields, body_start, key_lines = frontmatter.parse(lines)
@@ -259,13 +265,14 @@ function M.parse(lines, opts)
   ---@cast key_lines table<string, integer>
   local header_end = body_start - 1
 
-  local markers, marker_err = story.sections(lines)
+  local markers, marker_err = story.sections(lines, { draft = draft })
   if not markers then
     return nil,
       {
         {
           line = math.min(#lines, math.max(1, header_end)),
-          message = ('%s; :e! reloads the story (discarding your changes)'):format(marker_err),
+          message = draft and ('%s; add it back'):format(marker_err)
+            or ('%s; :e! reloads the story (discarding your changes)'):format(marker_err),
         },
       }
   end
@@ -280,7 +287,7 @@ function M.parse(lines, opts)
     if not key_lines[key] then
       table.insert(errors, {
         line = header_end,
-        message = ("missing header field '%s'; :e! reloads the story"):format(key),
+        message = ("missing header field '%s'; %s"):format(key, restore),
       })
     end
   end

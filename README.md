@@ -66,6 +66,11 @@ require('shortcut').setup({
     show_owners = true,   -- show task owners as a trailing ` · @mention` on task lines
     confirm_delete = true, -- ask before a save deletes tasks
   },
+  create = {              -- defaults of `:Shortcut create`, see "Creating stories"
+    workflow = nil,       -- workflow name or ID; default: the team's, else the workspace's default
+    team = nil,           -- team (name, mention name or ID) assigned to new stories
+    template = nil,       -- fun(fields): fields? to customize the template
+  },
 })
 ```
 
@@ -138,6 +143,7 @@ To fetch everything again now (e.g. after adding a label), run `:Shortcut refres
 | `:Shortcut search [query…]` | Search stories (live with snacks.nvim); see [Searching](#searching) |
 | `:Shortcut mine` | Your unfinished stories |
 | `:Shortcut epics [query…]` | Search epics (live with snacks.nvim) |
+| `:Shortcut create [key=value...]` | Open a draft of a new story; `:w` creates it (see [Creating stories](#creating-stories)) |
 | `:Shortcut comment [target]` | Write a comment on the story in a floating window; `:w` posts it |
 | `:Shortcut state [target] [state]` | Move the story to another workflow state |
 | `:Shortcut browse [target]` | Open the story or epic in the browser |
@@ -422,6 +428,83 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
 - If the changes are saved but reloading the story afterwards fails, the buffer stays modified
   and saving is refused until `:e!` reloads it (saving again could send the same changes twice).
 - While a save runs the buffer is read-only.
+
+### Creating stories
+
+`:Shortcut create` opens a draft of a new story, `shortcut://story/new-<n>` (several drafts can
+be open at once), in insert mode on the title line:
+
+```markdown
+---
+type: feature
+state: Backlog
+owners: [you]
+epic:
+iteration:
+estimate:
+labels: []
+---
+# 
+
+<!-- shortcut:tasks -->
+## Tasks
+```
+
+Fill it in like a story buffer (without `id`, `url` or comments) and `:w`: the story is created
+with every field and task, the window switches to its buffer (`shortcut://story/<id>`), and the
+draft is closed. Everything is checked exactly as when [editing](#editing-stories): problems are
+diagnostics, and nothing is sent until they are fixed. Labels must already exist, and task
+owners are the trailing ` · @mention` part.
+
+The template's defaults:
+
+- `owners`: you (the API token's member).
+- `state`: the first `unstarted` state of the workflow. The workflow is `create.workflow` (name
+  or ID); otherwise the default workflow of `create.team`, if that team has one; otherwise the
+  workspace's default workflow (from `GET /member`). `state` must be a state of that workflow;
+  use `workflow=<name>` to start a draft in another one.
+- `create.team` (name, mention name or ID) is assigned to the story (its team, `group_id`).
+- `create.template`, if set, is called with the fields (`title`, `description`, `type`,
+  `state`, `owners`, `epic`, `iteration`, `estimate`, `labels`, `tasks`) and may change them
+  or return new ones. `tasks` is a list of descriptions or of
+  `{ description, complete?, owners? }`:
+
+  ```lua
+  create = {
+    team = 'platform',
+    template = function(fields)
+      fields.description = '## Why\n\n## Acceptance criteria\n'
+      fields.tasks = { 'Write tests' }
+    end,
+  }
+  ```
+
+- Arguments come last: `:Shortcut create type=bug epic=678 state=In\ Progress
+  owners=jdoe,alex labels=backend iteration=Sprint\ 7 estimate=2 workflow=Engineering
+  team=platform`. Lists are comma-separated, an empty value (`epic=`) clears the field, and
+  spaces are escaped with `\`. `<Tab>` completes the keys and, once the lookup lists are
+  loaded, their values (types, states, owners, labels, iterations, workflows, teams).
+
+Writing a draft:
+
+- Only writing the draft to its own name, in its own window, creates the story (`:w`, `:w!`,
+  `:wq`, `:x`, `:update`). Writing it anywhere else (`:w file`, `:saveas file`,
+  `:w shortcut://story/<id>`, `:1,2w file`) fails with an error and sends nothing. So do
+  `:wall`, `:wqa` and `:xa` run from another window: the draft stays modified, so `:wqa` and
+  `:xa` don't exit.
+- The write waits for Shortcut's answer. `<C-c>` stops waiting: before the story is sent (while
+  the lookup lists load or the epic is checked) nothing is sent; once it is sent, it is still
+  created and its buffer opens when it is. If it fails, the draft stays open and modified with
+  the error, so `:wq` and `:x` don't close it. While the story is being created the draft is
+  read-only, writing it again sends nothing, and `:e!` keeps what is being sent.
+- Only a request refused before it was sent, or answered with a 4xx error, certainly created
+  nothing. Any other failure (no answer, a timeout, a server error, a success answer without the
+  story) may have created it: you are told to check Shortcut, and from then on `:w` refuses to
+  send the draft again. Each resend needs its own `:w!`, until a story is created from it.
+- Otherwise a draft is an ordinary modified buffer: Neovim's usual rules keep you from losing
+  it by accident (`E37`/`E162`), `:q!` and `:bwipeout!` discard it, and `:e!` puts the
+  template back.
+- After creating a story, `:Shortcut yank` copies its link.
 
 ## Epic buffers
 

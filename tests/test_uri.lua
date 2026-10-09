@@ -153,4 +153,20 @@ T['comment names'] = function()
   eq(uri.parse_comment_name(nil), nil)
 end
 
+T['draft names'] = function()
+  eq(uri.draft_name(3), 'shortcut://story/new-3')
+  eq(uri.parse('shortcut://story/new-3'), { kind = 'draft', id = 3 })
+  eq(uri.is_kind('draft'), false)
+  for _, name in ipairs({
+    'shortcut://story/new-0',
+    'shortcut://story/new-',
+    'shortcut://story/new-x',
+    'shortcut://epic/new-3',
+    'shortcut://story/new-3/comment',
+    'sc-new-3',
+  }) do
+    eq(uri.parse(name), nil)
+  end
+end
+
 return T

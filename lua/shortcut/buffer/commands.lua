@@ -21,6 +21,9 @@ function M.parse_arg(kind, arg)
   if not target then
     error(("invalid %s reference '%s'\n%s"):format(kind, arg, USAGE[kind]), 0)
   end
+  if target.kind == 'draft' then
+    error(("'%s' is a draft: it is not on Shortcut until it is written (:w)"):format(arg), 0)
+  end
   if target.kind ~= 'id' and target.kind ~= kind then
     error(
       ("'%s' is a link to %s %s, not %s %s"):format(
