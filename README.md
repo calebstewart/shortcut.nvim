@@ -61,6 +61,9 @@ require('shortcut').setup({
   sc_ids = true,          -- allow `:e sc-<id>`
   picker = { page_size = 25, max_results = 200 },  -- page_size: 1 to 250
   http = { timeout = 30 },  -- seconds
+  tasks = {
+    show_owners = true,   -- show task owners as a trailing ` · @mention` on task lines
+  },
 })
 ```
 
@@ -161,8 +164,67 @@ Other ways of naming it switch to that buffer:
 After the switch, `<C-^>` returns to the buffer you came from.
 
 > [!NOTE]
-> Rendering is not implemented yet: the buffer only shows the object's kind and ID, and `:w`
-> reports that saving is not supported.
+> Epic buffers are not rendered yet: they only show the epic's ID.
+
+## Story buffers
+
+A story opens as a Markdown buffer (filetype `markdown`; both Neovim's Markdown syntax and its
+treesitter highlighting show the header as YAML):
+
+```markdown
+---
+id: 12345
+type: feature
+state: In Progress
+owners: [someone, someone-else]
+epic: 678 Some epic
+iteration: Sprint 42
+estimate: 3
+labels: [backend, security]
+url: https://app.shortcut.com/<workspace>/story/12345
+---
+# Story title
+
+Description…
+
+<!-- shortcut:tasks -->
+## Tasks
+- [x] Done task · @someone
+- [ ] Open task
+- [ ] Shared task · @someone @someone-else
+
+<!-- shortcut:comments (read-only) -->
+## Comments
+**@someone** · 2026-10-01 14:03
+> Comment body…
+>
+> **@someone-else** · 2026-10-01 15:20
+> > A reply…
+```
+
+- **Header**, in this order: `id`; `type` (`feature`, `bug` or `chore`); `state` (the workflow
+  state's name); `owners` (mention names); `epic` (`<id> <name>`); `iteration` (its name);
+  `estimate`; `labels` (names); `url` (the story's link in the web app). `epic`, `iteration`
+  and `estimate` are empty when the story has none. Mentions are written **without** `@`
+  (a plain YAML value cannot start with one), but a leading `@` is accepted when reading.
+  Values YAML would misread (e.g. a label named `true`, or containing `: `) are double-quoted.
+- Names come from the [lookup-list cache](#lookup-list-cache). An ID that can't be resolved
+  (e.g. a member who left the workspace, or a list that couldn't be fetched) is shown as
+  `unknown-<id>`. The epic's name is fetched with the story; if that fails the line reads
+  `<id> (name unavailable)`.
+- **Title and description:** `# <title>`, then the description as written in Shortcut.
+- **Tasks**, in Shortcut's order. The section is always there, even when empty. A task's owners
+  follow its description: the **last** ` · ` followed only by `@mention`s holds the owners, and
+  everything before it is the description. (So a task description that itself ends in
+  ` · @name` is misread as having an owner.) Set `tasks.show_owners = false` to hide owners.
+- **Comments** are read-only: oldest first, each with its author and local time, the body
+  quoted; replies are nested one quote level deeper under the comment they answer. Deleted
+  comments are left out (a deleted comment with replies shows as `*(deleted comment)*`).
+- The `<!-- shortcut:… -->` lines mark where the sections start, so a description containing
+  its own `## Tasks` heading is not confused with the tasks. Leave them in place.
+- A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
+- `:e!` fetches the story again. Editing (`:w`) is not available yet: it reports so and keeps
+  your changes in the buffer.
 
 ## Development
 
