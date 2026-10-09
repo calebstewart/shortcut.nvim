@@ -345,6 +345,19 @@ T['conflicts'][':Shortcut diff shows the server version side by side'] = functio
   eq(child.wo.diff, true)
   eq(child.api.nvim_get_option_value('diff', { win = story_win }), true)
   eq(writes(), {})
+  -- Again, from the story's window: the old one is replaced, and both windows stay in diff mode.
+  child.api.nvim_set_current_win(story_win)
+  child.cmd('Shortcut diff')
+  child.lua([[vim.wait(1000, function()
+    return vim.api.nvim_buf_get_name(0) == 'shortcut-server://story/301'
+  end)]])
+  child.lua('vim.wait(50)')
+  eq(#child.api.nvim_tabpage_list_wins(0), 2)
+  eq(child.wo.diff, true)
+  eq(child.api.nvim_get_option_value('diff', { win = story_win }), true)
+  eq(#child.lua_get([[vim.tbl_filter(function(b)
+    return vim.api.nvim_buf_get_name(b) == 'shortcut-server://story/301'
+  end, vim.api.nvim_list_bufs())]]), 1)
   -- Closing it leaves diff mode in the story's window.
   child.cmd('close')
   child.lua('vim.wait(20)')

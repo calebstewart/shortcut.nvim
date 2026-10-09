@@ -700,9 +700,26 @@ function M.diff(buf)
     end
     local lines = story.render(fresh, story.cache_refs(epic), { show_owners = snap.show_owners })
     local name = M.DIFF_SCHEME .. id
+    local win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_get_buf(win) ~= buf then
+      win = vim.fn.win_findbuf(buf)[1]
+    end
     local old = vim.fn.bufnr('^' .. vim.fn.escape(name, '\\/.*$^~[]') .. '$')
     if old > 0 then
+      -- Replaced by the new one. Its wipeout callback (scheduled) would turn diff mode off after
+      -- the `diffthis` below, so remove it, and leave diff mode now in the window it was
+      -- compared with, unless that window is compared again.
+      local old_win = vim.b[old].shortcut_diff_win
+      pcall(vim.api.nvim_clear_autocmds, { event = 'BufWipeout', buffer = old })
       pcall(vim.api.nvim_buf_delete, old, { force = true })
+      if type(old_win) == 'number' and old_win ~= win and vim.api.nvim_win_is_valid(old_win) then
+        vim.api.nvim_win_call(old_win, function()
+          vim.cmd('diffoff')
+        end)
+      end
+    end
+    if not win then
+      return
     end
     local scratch = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(scratch, 0, -1, false, lines)
@@ -711,15 +728,8 @@ function M.diff(buf)
     vim.bo[scratch].modifiable = false
     vim.bo[scratch].modeline = false
     vim.bo[scratch].filetype = 'markdown'
+    vim.b[scratch].shortcut_diff_win = win
 
-    local win = vim.api.nvim_get_current_win()
-    if vim.api.nvim_win_get_buf(win) ~= buf then
-      win = vim.fn.win_findbuf(buf)[1]
-    end
-    if not win then
-      vim.api.nvim_buf_delete(scratch, { force = true })
-      return
-    end
     vim.api.nvim_win_call(win, function()
       vim.cmd('diffthis')
     end)
