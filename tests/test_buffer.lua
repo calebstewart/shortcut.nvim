@@ -22,7 +22,7 @@ local T = new_set({
         _G.handlers = require('shortcut.buffer.handlers')
 
         -- Work in a scratch directory with a known starting buffer.
-        _G.dir = vim.fn.fnamemodify(vim.fn.tempname(), ':p')
+        _G.dir = vim.fn.tempname() .. '/'
         vim.fn.mkdir(_G.dir, 'p')
         vim.cmd.cd(vim.fn.fnameescape(_G.dir))
         vim.fn.writefile({ 'start' }, 'start.txt')
@@ -237,6 +237,47 @@ T['shortcut://'][':w with the placeholder says saving is unsupported'] = functio
   child.cmd('write')
   eq(child.bo.modified, true)
   eq(messages()[1].msg, 'shortcut.nvim: failed to save sc-5: saving stories is not supported yet')
+end
+
+T['shortcut://'][':w is refused unless the load succeeded'] = function()
+  child.lua([[
+    _G.saves = 0
+    _G.pending = {}
+    handlers.register('story', {
+      load = function(buf, id, opts, done) table.insert(_G.pending, done) end,
+      save = function(buf, id, opts, done) _G.saves = _G.saves + 1; done() end,
+    })
+  ]])
+  edit('shortcut://story/6')
+
+  -- In flight: the buffer holds the loading message.
+  child.cmd('write')
+  eq(child.lua_get('_G.saves'), 0)
+  eq(messages()[1].msg, 'shortcut.nvim: sc-6 is still loading')
+
+  -- Failed: the buffer holds the error message.
+  child.lua([[_G.pending[1]('boom')]])
+  child.lua('_G.messages = {}')
+  child.cmd('write!')
+  eq(child.lua_get('_G.saves'), 0)
+  eq(messages(), {
+    {
+      msg = 'shortcut.nvim: sc-6 is not loaded; :e! to retry',
+      level = child.lua_get('vim.log.levels.ERROR'),
+    },
+  })
+
+  -- :e! again: in flight, and the failed load finishing late changes nothing.
+  child.cmd('edit!')
+  child.lua([[_G.pending[1]('late')]])
+  child.cmd('write')
+  eq(child.lua_get('_G.saves'), 0)
+
+  child.lua([[_G.pending[2](nil, { 'loaded' })]])
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'edited' })
+  child.cmd('write')
+  eq(child.lua_get('_G.saves'), 1)
+  eq(child.bo.modified, false)
 end
 
 T['shortcut://']['register() validates its arguments'] = function()
@@ -469,6 +510,45 @@ T['sc-<id>']['a new file matching sc-[0-9]* behaves as a new file'] = function()
   eq(child.fn.readfile('sc-1notes.md'), { 'hi' })
 end
 
+T['sc-<id>']['a new file in a directory is not an ID'] = function()
+  child.lua([[vim.fn.mkdir('notes')]])
+  edit('notes/sc-42')
+  eq(child.bo.buftype, '')
+  eq(buffers(), { 'sc-42', 'start.txt' })
+  child.type_keys('ihi<Esc>')
+  child.cmd('write')
+  eq(child.fn.readfile('notes/sc-42'), { 'hi' })
+  eq(messages(), {})
+end
+
+T['sc-<id>']['a swap file is handled as for any file'] = function()
+  -- Another running Nvim editing the file: Neovim's default SwapExists handler opens it anyway
+  -- with W325, as it would for a file not matching sc-[0-9]*.
+  child.lua([[
+    vim.o.updatecount = 200 -- the test child runs with -n
+    vim.o.directory = _G.dir .. 'swap//'
+    vim.fn.mkdir(_G.dir .. 'swap')
+    vim.fn.writefile({ 'content' }, 'sc-1notes.txt')
+    _G.other = vim.fn.jobstart(
+      { vim.v.progpath, '--clean', '--headless', '--cmd', 'set directory=' .. vim.o.directory, 'sc-1notes.txt' },
+      { cwd = _G.dir }
+    )
+    assert(vim.wait(5000, function() return #vim.fn.glob(_G.dir .. 'swap/*', false, true) > 0 end))
+    _G.swapexists = 0
+    vim.api.nvim_create_autocmd('SwapExists', { callback = function() _G.swapexists = _G.swapexists + 1 end })
+  ]])
+  edit('sc-1notes.txt')
+  child.lua('vim.fn.jobstop(_G.other)')
+  eq(lines(), { 'content' })
+  eq(child.lua_get('_G.swapexists'), 1)
+  eq(child.bo.readonly, false)
+  local msgs = messages()
+  eq(#msgs, 1)
+  expect.no_error(function()
+    assert(msgs[1].msg:find('W325', 1, true))
+  end)
+end
+
 T['sc-<id>']['a directory path ending in sc-<id> is not an ID'] = function()
   child.lua([[vim.fn.mkdir('sub'); vim.fn.writefile({ 'nested' }, 'sub/sc-9')]])
   edit('sub/sc-9')
@@ -524,6 +604,45 @@ T['gf']['works on sc-<id> and on a Shortcut URL'] = function()
   eq(messages(), {})
 end
 
+T['gf']['works in git commit messages'] = function()
+  child.lua([[
+    vim.cmd('filetype plugin on')
+    vim.fn.writefile({ 'Fix the thing', '', 'Part of sc-123.', 'See b/start.txt' }, 'COMMIT_EDITMSG')
+  ]])
+  edit('COMMIT_EDITMSG')
+  eq(child.bo.filetype, 'gitcommit')
+  -- The gitcommit ftplugin's own expression is kept for other names.
+  eq(child.b.shortcut_includeexpr, "substitute(v:fname,'^[bi]/','','')")
+
+  child.api.nvim_win_set_cursor(0, { 3, 9 })
+  child.type_keys('gf')
+  settle()
+  eq(cur_name(), 'shortcut://story/123')
+
+  child.type_keys('<C-^>')
+  child.api.nvim_win_set_cursor(0, { 4, 6 })
+  child.type_keys('gf')
+  eq(bufname(), 'start.txt')
+  eq(messages(), {})
+end
+
+T['gf']['chain_includeexpr() is idempotent and keeps the original expression'] = function()
+  child.lua([[
+    vim.bo.includeexpr = "toupper(v:fname)"
+    require('shortcut').chain_includeexpr()
+    require('shortcut').chain_includeexpr()
+  ]])
+  eq(child.b.shortcut_includeexpr, 'toupper(v:fname)')
+  eq(
+    child.bo.includeexpr,
+    "v:lua.require'shortcut.buffer.handlers'.includeexpr(v:fname, b:shortcut_includeexpr)"
+  )
+  eq(child.lua_get([[require('shortcut').includeexpr('sc-5', 'toupper("x")')]]), 'shortcut://id/5')
+  eq(child.lua_get([[require('shortcut').includeexpr('a.txt', 'toupper("x")')]]), 'X')
+  eq(child.lua_get([[require('shortcut').includeexpr('a.txt', string.upper)]]), 'A.TXT')
+  eq(child.lua_get([[require('shortcut').includeexpr('a.txt')]]), 'a.txt')
+end
+
 T['gf']['includeexpr leaves other names alone'] = function()
   eq(child.lua_get([[handlers.includeexpr('foo.lua')]]), 'foo.lua')
   eq(child.lua_get([[handlers.includeexpr('sc-12')]]), 'shortcut://id/12')
@@ -565,6 +684,24 @@ T['net plugin']['is guarded even if it is loaded after this plugin'] = function(
   eq(cur_name(), 'shortcut://story/123')
   eq(child.lua_get('_G.requests'), {})
   eq(messages(), {})
+end
+
+T['net plugin']['only skips URLs that this plugin opens'] = function()
+  -- Autocommand patterns ignore case only with 'fileignorecase' (the default on macOS and
+  -- Windows). Without it our handler doesn't see this URL, so the built-in one must fetch it
+  -- rather than leave an empty buffer.
+  local url = 'https://APP.shortcut.com/acme/story/9'
+  child.o.fileignorecase = false
+  edit(url)
+  eq(cur_name(), url)
+  eq(child.lua_get('_G.requests'), { url })
+
+  child.cmd('enew')
+  child.lua('_G.requests = {}')
+  child.o.fileignorecase = true
+  edit('https://APP.shortcut.com/acme/story/10')
+  eq(cur_name(), 'shortcut://story/10')
+  eq(child.lua_get('_G.requests'), {})
 end
 
 T['net plugin']['being disabled is fine'] = function()

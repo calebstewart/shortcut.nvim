@@ -83,12 +83,17 @@ Other ways of naming it switch to that buffer:
 
 - `:e https://app.shortcut.com/<workspace>/story/<id>/...` (or `/epic/<id>`): a link copied from
   the web app. Neovim's built-in download of `https://` files is skipped for these.
-- `:e sc-<id>`: looked up as a story or epic. Turn this off with `sc_ids = false`. Files whose
-  names merely start with `sc-<digits>` (e.g. `sc-1notes.txt`), or that exist on disk, open as
-  normal files.
-- `gf` on a Shortcut link or on `sc-<id>` in any buffer. For `sc-<id>` this works through
-  `'includeexpr'`, which the plugin sets globally when it is empty; filetypes whose ftplugin
-  sets their own (e.g. `gitcommit`, `lua`) don't get it.
+- `:e sc-<id>`: looked up as a story or epic. Turn this off with `sc_ids = false`. Names that
+  merely start with `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
+  `notes/sc-42`), and files that exist on disk open as normal files.
+- `gf` on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through `'includeexpr'`,
+  which the plugin sets globally when it is empty, and chains onto the `gitcommit` ftplugin's
+  own. Other filetypes that set their own (e.g. `lua`, `python`) can opt in from
+  `after/ftplugin/<filetype>.lua`; the original expression still handles every other name:
+
+  ```lua
+  require('shortcut').chain_includeexpr()
+  ```
 
 After the switch, `<C-^>` returns to the buffer you came from.
 

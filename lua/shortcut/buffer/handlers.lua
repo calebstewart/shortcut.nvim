@@ -43,6 +43,8 @@ local SC_GROUP = 'shortcut.buffer.sc_ids'
 local NET_GROUP = 'nvim.net.remotefile'
 local WEB_PATTERNS = { 'https://app.shortcut.com/*', 'http://app.shortcut.com/*' }
 local INCLUDEEXPR = "v:lua.require'shortcut.buffer.handlers'.includeexpr(v:fname)"
+local CHAINED_INCLUDEEXPR =
+  "v:lua.require'shortcut.buffer.handlers'.includeexpr(v:fname, b:shortcut_includeexpr)"
 local PLURAL = { story = 'stories', epic = 'epics' }
 
 ---@param kind shortcut.Kind
@@ -81,6 +83,11 @@ local pending = {}
 --- Incremented on every load of a buffer, so results of superseded loads are dropped.
 ---@type table<integer, integer>
 local generation = {}
+
+--- State of the current load of each buffer. Only a `'loaded'` buffer may be saved: otherwise
+--- its contents are a loading or error message, not the object.
+---@type table<integer, 'loading'|'loaded'|'failed'>
+local load_state = {}
 
 --- Callbacks of the built-in net plugin that have been wrapped already.
 ---@type table<function, true>
@@ -174,6 +181,21 @@ local function check_workspace(workspace)
   end)
 end
 
+--- Whether our web URL autocommand (`WEB_PATTERNS`) handles `name`. Like all autocommand
+--- patterns, those ignore case only if 'fileignorecase' is set.
+---@param name string
+---@return boolean
+local function is_routed_url(name)
+  if vim.o.fileignorecase then
+    name = name:lower()
+  end
+  if not name:match('^https?://app%.shortcut%.com/') then
+    return false
+  end
+  local target = uri.parse(name)
+  return target ~= nil and target.workspace ~= nil
+end
+
 --- Guard the built-in `nvim.net.remotefile` `BufReadCmd` handlers so they ignore Shortcut
 --- story/epic URLs instead of downloading the web page into the buffer. Idempotent; does nothing
 --- if that plugin is disabled.
@@ -184,8 +206,9 @@ function M.guard_net_plugin()
     if type(orig) == 'function' and not wrapped[orig] then
       vim.api.nvim_del_autocmd(ac.id)
       local function guarded(ev)
-        local target = uri.parse(ev.match)
-        if target and target.workspace then
+        -- Skip exactly what our own handler switches away from; anything else (other pages,
+        -- or a host spelled in another case when our pattern doesn't match it) is fetched.
+        if is_routed_url(ev.match) then
           return
         end
         return orig(ev)
@@ -217,6 +240,7 @@ local function load(buf, target, opts)
 
   generation[buf] = (generation[buf] or 0) + 1
   local gen = generation[buf]
+  load_state[buf] = 'loading'
 
   set_lines(buf, { ('Loading sc-%d…'):format(id) })
   vim.bo[buf].modifiable = false
@@ -230,12 +254,13 @@ local function load(buf, target, opts)
         return
       end
       finished = true
+      load_state[buf] = err and 'failed' or 'loaded'
       if err then
         notify.error(('failed to load sc-%d: %s'):format(id, err))
         local msg = { ('Failed to load sc-%d:'):format(id), '' }
         vim.list_extend(msg, vim.split(tostring(err), '\n', { plain = true }))
         set_lines(buf, msg)
-        -- Keep the error text from being saved over the object; `:e!` retries.
+        -- Not editable, and on_write refuses to save it; `:e!` retries.
         vim.bo[buf].modifiable = false
       else
         if lines then
@@ -396,6 +421,15 @@ local function on_write(ev)
     return
   end
   local kind, id = info.kind, info.id
+  -- 'nomodifiable' does not stop `:w`, and acwrite buffers are written even when unmodified.
+  local state = load_state[buf]
+  if state ~= 'loaded' then
+    notify.error(
+      state == 'loading' and ('sc-%d is still loading'):format(id)
+        or ('sc-%d is not loaded; :e! to retry'):format(id)
+    )
+    return
+  end
   local handler = registry[kind]
   if not handler or not handler.save then
     notify.error(('saving %s is not supported'):format(PLURAL[kind] or kind))
@@ -430,11 +464,11 @@ local function on_web_read(ev)
   -- In case the net plugin was sourced after this one and before VimEnter (e.g. a URL given
   -- on the command line). Its pending handler for this event is skipped once deleted.
   M.guard_net_plugin()
-  local target = uri.parse(ev.match)
-  if not target or not target.workspace then
+  if not is_routed_url(ev.match) then
     -- Some other Shortcut page: leave it to the built-in handler.
     return
   end
+  local target = assert(uri.parse(ev.match))
   prepare_alias(ev.buf)
   check_workspace(target.workspace)
   vim.schedule(function()
@@ -461,12 +495,20 @@ local function read_file(buf, name)
     local undolevels = vim.bo[buf].undolevels
     vim.bo[buf].undolevels = -1
     -- `++edit` detects 'fileformat', 'fileencoding', etc. as `:edit` would; `v:cmdarg` carries
-    -- any `++opt` given to the `:edit`. `noautocmd` skips FileReadPre/Post, which `:edit` does
-    -- not fire.
+    -- any `++opt` given to the `:edit`. Skip FileReadPre/Post, which `:edit` does not fire, but
+    -- not other autocommands: SwapExists handlers (e.g. Neovim's default one) must still run.
+    local eventignore = vim.go.eventignore
+    vim.go.eventignore = (eventignore == '' and '' or eventignore .. ',')
+      .. 'FileReadPre,FileReadPost'
     local ok, err = pcall(
       vim.api.nvim_command,
-      ('keepalt silent noautocmd read ++edit %s %s'):format(vim.v.cmdarg, vim.fn.fnameescape(name))
+      ('keepalt read ++edit %s %s'):format(
+        vim.v.cmdarg,
+        -- Relative, so the file info message reads as it would for `:edit`.
+        vim.fn.fnameescape(vim.fn.fnamemodify(name, ':~:.'))
+      )
     )
+    vim.go.eventignore = eventignore
     if ok then
       -- `:read` appends below the buffer's initial empty line.
       vim.api.nvim_buf_set_lines(buf, 0, 1, false, {})
@@ -496,7 +538,9 @@ local function on_sc_read(ev)
     return
   end
   if sc_ids_enabled() then
-    local target = uri.parse(vim.fn.fnamemodify(name, ':t'))
+    -- The pattern matches the tail of any path, but only a bare `sc-<id>` as typed (`ev.file`;
+    -- `ev.match` is always a full path) is a reference; `notes/sc-42` is a file.
+    local target = uri.parse(ev.file)
     if target and target.kind == 'id' and not vim.uv.fs_stat(name) then
       redirect_id(ev.buf, target.id)
       return
@@ -507,14 +551,44 @@ end
 
 --- `'includeexpr'` that makes `gf` work on `sc-<id>`: Neovim's `gf` only opens names that exist
 --- as files or look like URLs, so map `sc-<id>` to its not-yet-resolved `shortcut://` form.
+--- Any other name is passed to `fallback`, a Vimscript expression (evaluated with the same
+--- `v:fname`) or a Lua function, and returned unchanged if there is none.
 ---@param fname string
+---@param fallback? string|fun(fname: string): string
 ---@return string
-function M.includeexpr(fname)
+function M.includeexpr(fname, fallback)
   local target = uri.parse(fname)
   if target and target.kind == 'id' and sc_ids_enabled() then
     return uri.canonical('id', target.id)
   end
+  if type(fallback) == 'function' then
+    return fallback(fname)
+  end
+  if type(fallback) == 'string' and fallback ~= '' then
+    local ok, result = pcall(vim.fn.eval, fallback)
+    if ok and type(result) == 'string' then
+      return result
+    end
+  end
   return fname
+end
+
+--- Make `gf` work on `sc-<id>` in a buffer that has its own 'includeexpr', by wrapping it: other
+--- names still go through the original expression (kept in `b:shortcut_includeexpr`).
+--- Idempotent.
+---@param buf? integer Defaults to the current buffer.
+function M.chain_includeexpr(buf)
+  buf = buf == nil and vim.api.nvim_get_current_buf() or buf
+  local current = vim.bo[buf].includeexpr
+  if current == INCLUDEEXPR or current == CHAINED_INCLUDEEXPR then
+    return
+  end
+  if current == '' then
+    vim.bo[buf].includeexpr = INCLUDEEXPR
+    return
+  end
+  vim.b[buf].shortcut_includeexpr = current
+  vim.bo[buf].includeexpr = CHAINED_INCLUDEEXPR
 end
 
 --- Register or remove the `sc-<id>` handler according to `config.sc_ids`.
@@ -529,6 +603,8 @@ function M.sync_sc_ids(enabled)
       group = group,
       pattern = 'sc-[0-9]*',
       desc = 'shortcut.nvim: open sc-<id>',
+      -- So that autocommands triggered while reading a real file (SwapExists) run.
+      nested = true,
       callback = on_sc_read,
     })
   end
@@ -570,6 +646,7 @@ function M.setup()
     pattern = 'shortcut://*',
     callback = function(ev)
       generation[ev.buf] = nil
+      load_state[ev.buf] = nil
     end,
   })
   -- Plugin managers source plugins in varying orders relative to $VIMRUNTIME/plugin.
@@ -594,6 +671,22 @@ function M.setup()
       end
     end
   end
+  -- Commit messages are where sc-<id> appears most, and the gitcommit ftplugin sets its own
+  -- 'includeexpr'. Chaining keeps its behaviour for every other name. Deferred so it runs after
+  -- the ftplugin whatever order the FileType handlers were defined in (this plugin may be loaded
+  -- from init.lua, before filetype plugins are enabled).
+  vim.api.nvim_create_autocmd('FileType', {
+    group = group,
+    pattern = 'gitcommit',
+    desc = 'shortcut.nvim: gf on sc-<id>',
+    callback = function(ev)
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(ev.buf) and vim.bo[ev.buf].filetype == 'gitcommit' then
+          M.chain_includeexpr(ev.buf)
+        end
+      end)
+    end,
+  })
 end
 
 --- Forget cached `sc-<id>` kinds (for tests).
