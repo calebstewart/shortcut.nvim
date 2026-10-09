@@ -184,6 +184,8 @@
               nativeBuildInputs = [
                 pkgs.neovim-unwrapped
                 pkgs.gnumake
+                # Git-branch detection tests use temporary repositories.
+                pkgs.git
               ];
               MINI_NVIM = "${pkgs.vimPlugins.mini-nvim}";
               SNACKS_NVIM = "${pkgs.vimPlugins.snacks-nvim}";

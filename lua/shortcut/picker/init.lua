@@ -472,7 +472,7 @@ function M.open(item, cmd)
   end
 end
 
---- Copy an item's web link to the clipboard (the `+` register, or `"` without a clipboard).
+--- Copy an item's web link, like `:Shortcut yank`: to the unnamed register and the clipboard.
 ---@param item shortcut.picker.Item
 ---@return boolean ok
 function M.copy_url(item)
@@ -480,13 +480,16 @@ function M.copy_url(item)
     notify.error(('sc-%d has no web link'):format(item.id))
     return false
   end
-  local reg = vim.fn.has('clipboard') == 1 and '+' or '"'
-  local ok, err = pcall(vim.fn.setreg, reg, item.url)
-  if not ok then
-    notify.error(('could not copy the link: %s'):format(tostring(err)))
-    return false
-  end
-  notify.info(('copied %s'):format(item.url))
+  local regs = require('shortcut.actions').copy(item.url)
+  local where = #regs > 1
+      and ('registers %s'):format(table.concat(
+        vim.tbl_map(function(r)
+          return '"' .. r
+        end, regs),
+        ' '
+      ))
+    or 'the unnamed register (no clipboard available)'
+  notify.info(('copied %s to %s'):format(item.url, where))
   return true
 end
 

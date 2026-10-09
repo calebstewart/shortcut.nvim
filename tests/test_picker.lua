@@ -469,7 +469,13 @@ T['actions'] = new_set()
 T['actions']['copy the web link'] = function()
   child.lua([[picker.copy_url({ id = 1, url = 'https://app.shortcut.com/x/story/1' })]])
   eq(child.lua_get([[_G.clipboard['+'] ]]), { 'https://app.shortcut.com/x/story/1' })
-  eq(messages()[1].msg, 'shortcut.nvim: copied https://app.shortcut.com/x/story/1')
+  eq(child.fn.getreg('"'), 'https://app.shortcut.com/x/story/1')
+  eq(
+    messages()[1].msg:match(
+      '^shortcut.nvim: copied https://app.shortcut.com/x/story/1 to registers "" "%+'
+    ) ~= nil,
+    true
+  )
 end
 
 T['actions']['open in the browser'] = function()

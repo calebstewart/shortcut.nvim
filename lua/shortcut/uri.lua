@@ -6,6 +6,10 @@
 --- - `shortcut://id/<id>`: an object whose kind is not known yet (see `canonical('id', id)`).
 --- - `http(s)://app.shortcut.com/<workspace>/(story|epic)/<id>[/<slug>][/][?query][#fragment]`
 --- - `sc-<id>`: kind not known yet.
+---
+--- `shortcut://story/<id>/comment` names the buffer of a comment being written (see
+--- `shortcut.buffer.comment`); `parse()` rejects it, `comment_name()`/`parse_comment_name()`
+--- handle it.
 local M = {}
 
 ---@alias shortcut.Kind 'story'|'epic'
@@ -118,6 +122,23 @@ end
 ---@return string
 function M.canonical(kind, id)
   return ('shortcut://%s/%d'):format(kind, id)
+end
+
+--- The name of the buffer for writing a comment on a story.
+---@param id integer
+---@return string
+function M.comment_name(id)
+  return ('shortcut://story/%d/comment'):format(id)
+end
+
+--- The story ID of a comment buffer name, or `nil` if `str` is not one.
+---@param str any
+---@return integer?
+function M.parse_comment_name(str)
+  if type(str) ~= 'string' then
+    return nil
+  end
+  return to_id(str:match('^shortcut://story/(%d+)/comment$'))
 end
 
 --- Whether `kind` is a real object kind (not `'id'`).
