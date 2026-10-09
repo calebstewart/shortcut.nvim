@@ -518,6 +518,8 @@ local function ensure_cleanup()
 end
 
 local CR = vim.keycode('<CR>')
+local CR_BYTE = CR:byte()
+local K_SPECIAL = 0x80
 
 --- The normal-mode `<CR>` mapping in a list from `nvim_get_keymap()`/`nvim_buf_get_keymap()`.
 ---@param maps table[]
@@ -569,18 +571,26 @@ local function replay(m)
   if m.noremap == 1 then
     table.insert(pieces, { keys, 'n' })
   else
-    local pos = 1
+    -- Split at each `<CR>` byte, skipping special keys: they are three bytes starting with
+    -- K_SPECIAL (0x80), and some of them (e.g. `<S-F8>`) contain a `\r` byte.
+    local start, pos = 1, 1
     while pos <= #keys do
-      local cr = keys:find(CR, pos, true)
-      if not cr then
-        table.insert(pieces, { keys:sub(pos), 'm' })
-        break
+      local b = keys:byte(pos)
+      if b == K_SPECIAL then
+        pos = pos + 3
+      elseif b == CR_BYTE then
+        if pos > start then
+          table.insert(pieces, { keys:sub(start, pos - 1), 'm' })
+        end
+        table.insert(pieces, { CR, 'n' })
+        pos = pos + 1
+        start = pos
+      else
+        pos = pos + 1
       end
-      if cr > pos then
-        table.insert(pieces, { keys:sub(pos, cr - 1), 'm' })
-      end
-      table.insert(pieces, { CR, 'n' })
-      pos = cr + 1
+    end
+    if start <= #keys then
+      table.insert(pieces, { keys:sub(start), 'm' })
     end
   end
   -- Each insertion goes in front of the previous one: feed the last piece first.

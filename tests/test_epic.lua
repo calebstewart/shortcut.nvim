@@ -701,6 +701,14 @@ T['buffer']['<CR> replay: a remapping rhs starting with <CR> does not loop'] = f
   child.lua('vim.wait(20)')
   eq(child.lua_get('_G.cr_calls'), 2)
   eq(child.api.nvim_win_get_cursor(0), { 14, 0 })
+  -- Special keys whose code contains a `\r` byte are not split.
+  child.cmd('nnoremap <S-F8> 3j')
+  child.cmd('nmap <CR> <S-F8>')
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('<CR>')
+  child.lua('vim.wait(20)')
+  eq(child.lua_get('_G.cr_calls'), 3)
+  eq(child.api.nvim_win_get_cursor(0), { 15, 0 })
   eq(messages(), {})
 end
 
