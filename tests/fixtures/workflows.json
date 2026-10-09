@@ -1,0 +1,120 @@
+[
+  {
+    "auto_assign_owner": false,
+    "created_at": "2026-01-15T12:00:00Z",
+    "default_state_id": 501,
+    "description": "",
+    "entity_type": "workflow",
+    "id": 500,
+    "name": "Engineering",
+    "project_ids": [],
+    "states": [
+      {
+        "color": "#cccccc",
+        "created_at": "2026-01-15T12:00:00Z",
+        "description": "",
+        "entity_type": "workflow-state",
+        "global_id": "00000000-0000-4000-8000-000000001030",
+        "id": 501,
+        "name": "Backlog",
+        "num_stories": 0,
+        "num_story_templates": 0,
+        "position": 0,
+        "type": "unstarted",
+        "updated_at": "2026-01-15T12:00:00Z",
+        "verb": null
+      },
+      {
+        "color": "#cccccc",
+        "created_at": "2026-01-15T12:00:00Z",
+        "description": "",
+        "entity_type": "workflow-state",
+        "global_id": "00000000-0000-4000-8000-000000001032",
+        "id": 502,
+        "name": "In Progress",
+        "num_stories": 0,
+        "num_story_templates": 0,
+        "position": 1,
+        "type": "started",
+        "updated_at": "2026-01-15T12:00:00Z",
+        "verb": null
+      },
+      {
+        "color": "#cccccc",
+        "created_at": "2026-01-15T12:00:00Z",
+        "description": "",
+        "entity_type": "workflow-state",
+        "global_id": "00000000-0000-4000-8000-000000001034",
+        "id": 503,
+        "name": "Done",
+        "num_stories": 0,
+        "num_story_templates": 0,
+        "position": 2,
+        "type": "done",
+        "updated_at": "2026-01-15T12:00:00Z",
+        "verb": null
+      }
+    ],
+    "team_id": 1,
+    "updated_at": "2026-01-15T12:00:00Z"
+  },
+  {
+    "auto_assign_owner": false,
+    "created_at": "2026-01-15T12:00:00Z",
+    "default_state_id": 511,
+    "description": "",
+    "entity_type": "workflow",
+    "id": 510,
+    "name": "Design",
+    "project_ids": [],
+    "states": [
+      {
+        "color": "#cccccc",
+        "created_at": "2026-01-15T12:00:00Z",
+        "description": "",
+        "entity_type": "workflow-state",
+        "global_id": "00000000-0000-4000-8000-000000001036",
+        "id": 511,
+        "name": "To Do",
+        "num_stories": 0,
+        "num_story_templates": 0,
+        "position": 0,
+        "type": "unstarted",
+        "updated_at": "2026-01-15T12:00:00Z",
+        "verb": null
+      },
+      {
+        "color": "#cccccc",
+        "created_at": "2026-01-15T12:00:00Z",
+        "description": "",
+        "entity_type": "workflow-state",
+        "global_id": "00000000-0000-4000-8000-000000001038",
+        "id": 512,
+        "name": "In Progress",
+        "num_stories": 0,
+        "num_story_templates": 0,
+        "position": 1,
+        "type": "started",
+        "updated_at": "2026-01-15T12:00:00Z",
+        "verb": null
+      },
+      {
+        "color": "#cccccc",
+        "created_at": "2026-01-15T12:00:00Z",
+        "description": "",
+        "entity_type": "workflow-state",
+        "global_id": "00000000-0000-4000-8000-000000001040",
+        "id": 513,
+        "name": "Shipped",
+        "num_stories": 0,
+        "num_story_templates": 0,
+        "position": 2,
+        "type": "done",
+        "updated_at": "2026-01-15T12:00:00Z",
+        "verb": null
+      }
+    ],
+    "team_id": 1,
+    "updated_at": "2026-01-15T12:00:00Z"
+  }
+]

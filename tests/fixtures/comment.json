@@ -1,0 +1,21 @@
+{
+  "app_url": "https://app.shortcut.com/example-workspace/story/101/example-story#activity-123",
+  "author_id": "00000000-0000-4000-8000-000000000101",
+  "blocker": false,
+  "created_at": "2026-01-15T12:00:00Z",
+  "deleted": false,
+  "entity_type": "story-comment",
+  "external_id": null,
+  "group_mention_ids": [],
+  "id": 123,
+  "linked_to_slack": false,
+  "member_mention_ids": [],
+  "mention_ids": [],
+  "parent_id": null,
+  "position": 3,
+  "reactions": [],
+  "story_id": 101,
+  "text": "A new comment.",
+  "unblocks_parent": false,
+  "updated_at": "2026-01-15T12:00:00Z"
+}

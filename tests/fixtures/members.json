@@ -1,0 +1,80 @@
+[
+  {
+    "created_at": "2026-01-15T12:00:00Z",
+    "created_without_invite": false,
+    "disabled": false,
+    "entity_type": "member",
+    "global_id": "00000000-0000-4000-8000-000000001003",
+    "group_ids": [
+      "00000000-0000-4000-8000-000000000201"
+    ],
+    "id": "00000000-0000-4000-8000-000000000101",
+    "profile": {
+      "deactivated": false,
+      "display_icon": null,
+      "email_address": "jdoe@example.com",
+      "entity_type": "profile",
+      "gravatar_hash": null,
+      "id": "00000000-0000-4000-8000-000000001000",
+      "is_owner": false,
+      "mention_name": "jdoe",
+      "name": "Jane Doe",
+      "two_factor_auth_activated": false
+    },
+    "role": "admin",
+    "state": "full",
+    "updated_at": "2026-01-15T12:00:00Z"
+  },
+  {
+    "created_at": "2026-01-15T12:00:00Z",
+    "created_without_invite": false,
+    "disabled": false,
+    "entity_type": "member",
+    "global_id": "00000000-0000-4000-8000-000000001013",
+    "group_ids": [
+      "00000000-0000-4000-8000-000000000201"
+    ],
+    "id": "00000000-0000-4000-8000-000000000102",
+    "profile": {
+      "deactivated": false,
+      "display_icon": null,
+      "email_address": "Alex.Smith@example.com",
+      "entity_type": "profile",
+      "gravatar_hash": null,
+      "id": "00000000-0000-4000-8000-000000001010",
+      "is_owner": false,
+      "mention_name": "Alex.Smith",
+      "name": "Alex Smith",
+      "two_factor_auth_activated": false
+    },
+    "role": "member",
+    "state": "full",
+    "updated_at": "2026-01-15T12:00:00Z"
+  },
+  {
+    "created_at": "2026-01-15T12:00:00Z",
+    "created_without_invite": false,
+    "disabled": true,
+    "entity_type": "member",
+    "global_id": "00000000-0000-4000-8000-000000001023",
+    "group_ids": [
+      "00000000-0000-4000-8000-000000000201"
+    ],
+    "id": "00000000-0000-4000-8000-000000000103",
+    "profile": {
+      "deactivated": false,
+      "display_icon": null,
+      "email_address": "former@example.com",
+      "entity_type": "profile",
+      "gravatar_hash": null,
+      "id": "00000000-0000-4000-8000-000000001020",
+      "is_owner": false,
+      "mention_name": "former",
+      "name": "Former Member",
+      "two_factor_auth_activated": false
+    },
+    "role": "member",
+    "state": "disabled",
+    "updated_at": "2026-01-15T12:00:00Z"
+  }
+]

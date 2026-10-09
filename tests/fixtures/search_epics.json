@@ -1,0 +1,83 @@
+{
+  "data": [
+    {
+      "app_url": "https://app.shortcut.com/example-workspace/epic/201",
+      "archived": false,
+      "completed": false,
+      "completed_at": null,
+      "completed_at_override": null,
+      "created_at": "2026-01-15T12:00:00Z",
+      "deadline": null,
+      "entity_type": "epic",
+      "epic_state_id": 522,
+      "external_id": null,
+      "follower_ids": [
+        "00000000-0000-4000-8000-000000000101"
+      ],
+      "global_id": "00000000-0000-4000-8000-000000001080",
+      "group_id": "00000000-0000-4000-8000-000000000201",
+      "group_ids": [
+        "00000000-0000-4000-8000-000000000201"
+      ],
+      "group_mention_ids": [],
+      "id": 201,
+      "label_ids": [
+        601
+      ],
+      "labels": [
+        {
+          "app_url": "https://app.shortcut.com/example-workspace/label/601",
+          "archived": false,
+          "color": "#ff0000",
+          "created_at": "2026-01-15T12:00:00Z",
+          "description": null,
+          "entity_type": "label",
+          "external_id": null,
+          "global_id": "00000000-0000-4000-8000-000000001081",
+          "id": 601,
+          "name": "bug",
+          "updated_at": "2026-01-15T12:00:00Z"
+        }
+      ],
+      "member_mention_ids": [],
+      "mention_ids": [],
+      "milestone_id": null,
+      "name": "Example Epic",
+      "objective_ids": [],
+      "owner_ids": [
+        "00000000-0000-4000-8000-000000000101"
+      ],
+      "planned_start_date": null,
+      "position": 1,
+      "productboard_id": null,
+      "productboard_name": null,
+      "productboard_plugin_id": null,
+      "productboard_url": null,
+      "project_ids": [],
+      "requested_by_id": "00000000-0000-4000-8000-000000000101",
+      "started": true,
+      "started_at": "2026-01-15T12:00:00Z",
+      "started_at_override": null,
+      "state": "in progress",
+      "stats": {
+        "last_story_update": null,
+        "num_points": 0,
+        "num_points_backlog": 0,
+        "num_points_done": 0,
+        "num_points_started": 0,
+        "num_points_unstarted": 0,
+        "num_related_documents": 0,
+        "num_stories_backlog": 0,
+        "num_stories_done": 0,
+        "num_stories_started": 0,
+        "num_stories_total": 0,
+        "num_stories_unestimated": 0,
+        "num_stories_unstarted": 0
+      },
+      "stories_without_projects": 3,
+      "updated_at": "2026-01-15T12:00:00Z"
+    }
+  ],
+  "next": null,
+  "total": 1
+}

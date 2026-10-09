@@ -1,0 +1,70 @@
+[
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/iteration/701",
+    "created_at": "2026-01-15T12:00:00Z",
+    "end_date": "2026-01-18",
+    "entity_type": "iteration",
+    "follower_ids": [],
+    "global_id": "00000000-0000-4000-8000-000000001062",
+    "group_ids": [
+      "00000000-0000-4000-8000-000000000201"
+    ],
+    "group_mention_ids": [],
+    "id": 701,
+    "label_ids": [],
+    "labels": [],
+    "member_mention_ids": [],
+    "mention_ids": [],
+    "name": "Sprint 1",
+    "start_date": "2026-01-05",
+    "stats": {
+      "num_points": 0,
+      "num_points_backlog": 0,
+      "num_points_done": 0,
+      "num_points_started": 0,
+      "num_points_unstarted": 0,
+      "num_related_documents": 0,
+      "num_stories_backlog": 0,
+      "num_stories_done": 0,
+      "num_stories_started": 0,
+      "num_stories_unestimated": 0,
+      "num_stories_unstarted": 0
+    },
+    "status": "done",
+    "updated_at": "2026-01-15T12:00:00Z"
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/iteration/702",
+    "created_at": "2026-01-15T12:00:00Z",
+    "end_date": "2026-02-01",
+    "entity_type": "iteration",
+    "follower_ids": [],
+    "global_id": "00000000-0000-4000-8000-000000001064",
+    "group_ids": [
+      "00000000-0000-4000-8000-000000000201"
+    ],
+    "group_mention_ids": [],
+    "id": 702,
+    "label_ids": [],
+    "labels": [],
+    "member_mention_ids": [],
+    "mention_ids": [],
+    "name": "Sprint 2",
+    "start_date": "2026-01-19",
+    "stats": {
+      "num_points": 0,
+      "num_points_backlog": 0,
+      "num_points_done": 0,
+      "num_points_started": 0,
+      "num_points_unstarted": 0,
+      "num_related_documents": 0,
+      "num_stories_backlog": 0,
+      "num_stories_done": 0,
+      "num_stories_started": 0,
+      "num_stories_unestimated": 0,
+      "num_stories_unstarted": 0
+    },
+    "status": "started",
+    "updated_at": "2026-01-15T12:00:00Z"
+  }
+]

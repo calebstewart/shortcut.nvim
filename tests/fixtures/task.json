@@ -1,0 +1,17 @@
+{
+  "complete": false,
+  "completed_at": null,
+  "created_at": "2026-01-15T12:00:00Z",
+  "description": "A new task",
+  "entity_type": "story-task",
+  "external_id": null,
+  "global_id": "00000000-0000-4000-8000-000000001078",
+  "group_mention_ids": [],
+  "id": 113,
+  "member_mention_ids": [],
+  "mention_ids": [],
+  "owner_ids": [],
+  "position": 3,
+  "story_id": 101,
+  "updated_at": "2026-01-15T12:00:00Z"
+}
