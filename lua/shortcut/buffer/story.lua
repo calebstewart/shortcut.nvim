@@ -144,7 +144,8 @@ local function one_line(s)
 end
 M.one_line = one_line
 
---- Characters replaced in the read-only file entries: C0 controls but tab, DEL, C1 controls,
+--- Characters replaced in the read-only section: in comment and file headers, and in file
+--- names, types and descriptions (not in comment text): C0 controls but tab, DEL, C1 controls,
 --- and Unicode line/paragraph separators and bidirectional formatting characters (which could
 --- make a file name display as something else).
 local UNSAFE = {
@@ -535,7 +536,8 @@ function M.format_size(size)
   return text .. ' ' .. units[unit]
 end
 
---- Whether a file URL may be shown as a Markdown link: `https://` with a host, and only
+--- Whether a file URL may be shown as a Markdown link: `https://` with a host and no userinfo
+--- (`user@`), and only
 --- printable ASCII characters that can't end the link or start another (no spaces, control
 --- characters, `(`, `)`, `<`, `>`, `\` or backquotes).
 ---@param url any
@@ -543,12 +545,15 @@ end
 function M.safe_url(url)
   return type(url) == 'string'
     and url:match('^https://[^/?#]') ~= nil
+    -- No userinfo (`https://media.example.com@evil.example/`): the host is what it looks like.
+    and url:match('^https://[^/?#]*@') == nil
     and url:match('^[!-~]+$') ~= nil
     and url:find('[()<>\\`]') == nil
 end
 
---- A file name as Markdown text: on one line, printable, and with the characters that could
---- make or break a link (`[`, `]`, `<`, `>`, backquotes and backslashes) backslash-escaped.
+--- A server string (a file name or type, a header part) as Markdown text: on one line,
+--- printable, and with the characters that could make or break a link (`[`, `]`, `<`, `>`,
+--- backquotes and backslashes) backslash-escaped.
 ---@param s string
 ---@return string
 local function markdown_text(s)
@@ -578,7 +583,8 @@ function M.file_line(file)
     'Attachment: ' .. (M.safe_url(file.url) and ('[%s](%s)'):format(name, file.url) or name),
   }
   if type(file.content_type) == 'string' then
-    local content_type = vim.trim(printable(one_line(file.content_type)))
+    -- Free-form, set by the uploader: escaped like the name, so it can't add links.
+    local content_type = vim.trim(markdown_text(file.content_type))
     if content_type ~= '' then
       table.insert(parts, content_type)
     end
@@ -645,6 +651,20 @@ function M.render(story, refs, opts)
   meta.comments_marker = add(M.COMMENTS_MARKER)
   add('## Comments')
 
+  --- The `**@author** · date` header of a comment or file. Both parts are escaped like file
+  --- names (see `markdown_text()`): a mention or an unparsable date shown as it is can't add
+  --- links or display as something else.
+  ---@param author any
+  ---@param created_at any
+  ---@return string
+  local function entry_header(author, created_at)
+    return ('**@%s**%s%s'):format(
+      markdown_text(present(author) and mention(refs, author) or 'unknown'),
+      M.SEPARATOR,
+      markdown_text(M.format_time(created_at))
+    )
+  end
+
   ---@param node { comment: table, replies: table[] }
   ---@param prefix string Blockquote prefix of the comment's header line.
   local function render_comment(node, prefix)
@@ -653,11 +673,7 @@ function M.render(story, refs, opts)
     if c.deleted == true then
       header = '*(deleted comment)*'
     else
-      header = ('**@%s**%s%s'):format(
-        present(c.author_id) and mention(refs, c.author_id) or 'unknown',
-        M.SEPARATOR,
-        M.format_time(c.created_at)
-      )
+      header = entry_header(c.author_id, c.created_at)
     end
     meta.comments[c.id] = add((prefix .. header):gsub('%s+$', ''))
     local body = prefix .. '> '
@@ -678,13 +694,7 @@ function M.render(story, refs, opts)
 
   ---@param file table
   local function render_file(file)
-    meta.files[file.id] = add(
-      ('**@%s**%s%s'):format(
-        present(file.uploader_id) and mention(refs, file.uploader_id) or 'unknown',
-        M.SEPARATOR,
-        M.format_time(file.created_at)
-      )
-    )
+    meta.files[file.id] = add(entry_header(file.uploader_id, file.created_at))
     add(('> ' .. M.file_line(file)):gsub('%s+$', ''))
     local description = text_lines(file.description)
     while #description > 0 and description[#description]:match('^%s*$') do

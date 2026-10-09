@@ -480,6 +480,13 @@ T['render()']['files: only https:// URLs without spaces or control characters ar
     { 'https://media.example.com/a>.png', false },
     { 'https://media.example.com/a\\.png', false },
     { 'https://media.example.com/a`.png', false },
+    -- Userinfo: the host would not be what it looks like.
+    { 'https://media.example.com@evil.example/x.png', false },
+    { 'https://user:pass@media.example.com/x.png', false },
+    { 'https://@media.example.com/x.png', false },
+    -- An `@` after the host is fine.
+    { 'https://media.example.com/files/a@2x.png', true },
+    { 'https://media.example.com?by=a@b', true },
     { 42, false },
   }
   for _, u in ipairs(urls) do
@@ -501,9 +508,11 @@ T['render()']['files: only https:// URLs without spaces or control characters ar
   eq(r.lines[r.meta.files['3'] + 1], '> Attachment: [c.png](https://media.example.com/c.png)')
 end
 
-T['render()']['files: hostile names, types and descriptions render safely'] = function()
+T['render()']['files: hostile names, types, descriptions and headers render safely'] = function()
   local r = render(([[
-    s.comments = {}
+    s.comments = {
+      { id = 8, author_id = vim.NIL, created_at = 'when \226\128\174 <https://evil.example/c>', deleted = false, text = 'body' },
+    }
     s.files = {
       { id = 1, uploader_id = '%s', created_at = '2026-03-01T10:00:00Z', name = 'evil\nname\r\n.png',
         url = 'https://media.example.com/1', content_type = 'image/png\n', size = 10,
@@ -515,11 +524,18 @@ T['render()']['files: hostile names, types and descriptions render safely'] = fu
         url = 'https://media.example.com/4' },
       { id = 5, uploader_id = '%s', created_at = '2026-03-01T14:00:00Z', name = '<https://evil.example> `x` \\[',
         url = 'https://media.example.com/5 x' },
-      { id = 6, uploader_id = 'odd\nid', created_at = 'bad\ndate', name = '![img](https://evil.example/x.png)' },
+      { id = 6, uploader_id = 'odd\nid', created_at = 'bad\ndate \226\128\174 [d](https://evil.example/d)',
+        name = '![img](https://evil.example/x.png)' },
+      { id = 7, uploader_id = '%s', created_at = '2026-03-01T15:00:00Z', name = 'report.pdf',
+        url = 'https://media.example.com/7', size = 10,
+        content_type = 'application/pdf · [report.pdf](javascript:alert(1)) <https://evil.example/r.pdf> ![t](https://evil.example/p.png)' },
     }
-  ]]):format(JDOE, JDOE, JDOE, JDOE, JDOE))
+  ]]):format(JDOE, JDOE, JDOE, JDOE, JDOE, JDOE))
   eq(vim.list_slice(r.lines, r.meta.comments_marker + 2, #r.lines), {
-    '**@unknown-odd id** · bad date',
+    '**@unknown** · when � \\<https://evil.example/c\\>',
+    '> body',
+    '',
+    '**@unknown-odd id** · bad date � \\[d\\](https://evil.example/d)',
     '> Attachment: !\\[img\\](https://evil.example/x.png)',
     '',
     '**@jdoe** · 2026-03-01 10:00',
@@ -541,6 +557,43 @@ T['render()']['files: hostile names, types and descriptions render safely'] = fu
     '',
     '**@jdoe** · 2026-03-01 14:00',
     '> Attachment: \\<https://evil.example\\> \\`x\\` \\\\\\[',
+    '',
+    '**@jdoe** · 2026-03-01 15:00',
+    '> Attachment: [report.pdf](https://media.example.com/7) · application/pdf · '
+      .. '\\[report.pdf\\](javascript:alert(1)) \\<https://evil.example/r.pdf\\> '
+      .. '!\\[t\\](https://evil.example/p.png) · 10 B',
+  })
+  -- As Markdown: the only links are the files' safe URLs; no images or autolinks.
+  local found = child.lua(
+    [[
+    local text = table.concat(..., '\n')
+    local parser = vim.treesitter.get_string_parser(text, 'markdown')
+    parser:parse(true)
+    local out = {}
+    parser:for_each_tree(function(tree, ltree)
+      if ltree:lang() ~= 'markdown_inline' then return end
+      local query = vim.treesitter.query.parse('markdown_inline', [=[
+        (inline_link (link_destination) @link)
+        (image) @image
+        (uri_autolink) @autolink
+        (email_autolink) @autolink
+        (full_reference_link) @reference
+        (collapsed_reference_link) @reference
+        (shortcut_link) @reference
+      ]=])
+      for id, node in query:iter_captures(tree:root(), text) do
+        table.insert(out, query.captures[id] .. ' ' .. vim.treesitter.get_node_text(node, text))
+      end
+    end)
+    table.sort(out)
+    return out
+  ]],
+    { r.lines }
+  )
+  eq(found, {
+    'link https://media.example.com/1',
+    'link https://media.example.com/4',
+    'link https://media.example.com/7',
   })
   -- And the lines can be set in a buffer.
   child.lua('vim.api.nvim_buf_set_lines(0, 0, -1, false, ...)', { r.lines })
