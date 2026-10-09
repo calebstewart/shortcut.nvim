@@ -95,7 +95,8 @@ local UNKNOWN_RANK = 5
 ---@field unstarted integer
 ---@field started integer
 ---@field done integer
----@field unknown integer Stories whose state (type) is unknown.
+---@field unknown integer Stories whose state could not be looked up (or has no type).
+---@field other table<string, integer> Stories in states of any other type, by type.
 
 ---@class shortcut.epic.Group
 ---@field name string The state name (states with the same name are merged).
@@ -181,13 +182,17 @@ end
 ---@return shortcut.epic.Counts
 function M.counts(stories, refs)
   refs = refs or {}
-  local counts = { total = 0, backlog = 0, unstarted = 0, started = 0, done = 0, unknown = 0 }
+  local counts =
+    { total = 0, backlog = 0, unstarted = 0, started = 0, done = 0, unknown = 0, other = {} }
   for _, s in ipairs(visible(stories)) do
     counts.total = counts.total + 1
     local st = story_state(refs, s)
     local t = st and st.type
     if t and TYPE_RANK[t] then
       counts[t] = counts[t] + 1
+    elseif type(t) == 'string' and t ~= '' then
+      t = one_line(t)
+      counts.other[t] = (counts.other[t] or 0) + 1
     else
       counts.unknown = counts.unknown + 1
     end
@@ -195,10 +200,10 @@ function M.counts(stories, refs)
   return counts
 end
 
---- The `stories` header value: `14 (6 done, 5 started, 3 unstarted)`, plus `, N backlog` if
---- any are in a backlog state and `, N unknown` for stories in a state that could not be
---- looked up. Just `0` (an integer, so it is written
---- unquoted) for an empty epic.
+--- The `stories` header value: `14 (6 done, 5 started, 3 unstarted)`. Then, only when there
+--- are any: `, N backlog`; `, N <type>` for each other (unrecognised) state type, by name; and
+--- `, N unknown` for stories whose state could not be looked up. An empty epic is just `0`
+--- (an integer, so that it is written unquoted).
 ---@param counts shortcut.epic.Counts
 ---@return string|integer
 function M.summary(counts)
@@ -213,6 +218,11 @@ function M.summary(counts)
   )
   if counts.backlog > 0 then
     s = s .. (', %d backlog'):format(counts.backlog)
+  end
+  local others = vim.tbl_keys(counts.other or {})
+  table.sort(others)
+  for _, t in ipairs(others) do
+    s = s .. (', %d %s'):format(counts.other[t], t)
   end
   if counts.unknown > 0 then
     s = s .. (', %d unknown'):format(counts.unknown)
@@ -315,8 +325,9 @@ local function by_position(a, b)
 end
 
 --- Stories grouped by state name, groups in order: by state type (backlog, unstarted, started,
---- done, then unknown states), then by the state's position in its workflow, then by name. States of
---- different workflows with the same name are one group, placed by the first of them.
+--- done, then unknown states or types), then by the state's position in its workflow, then by
+--- name. States of different workflows with the same name are one group, placed by the
+--- earliest of them.
 ---@param stories any
 ---@param refs shortcut.epic.Refs
 ---@return { name: string, stories: table[] }[]
@@ -464,6 +475,13 @@ local snapshots = {}
 ---@type table<integer, { cancel: fun() }>
 local loading = {}
 
+--- Buffer-local `<CR>` mappings that were there before ours (e.g. from a markdown plugin), by
+--- buffer: replayed on lines without an `sc-<id>`.
+---@type table<integer, table>
+local previous_cr = {}
+
+M.CR_DESC = 'shortcut.nvim: open the sc-<id> on this line'
+
 local cleanup_group ---@type integer?
 
 ---@param buf integer
@@ -489,6 +507,79 @@ local function ensure_cleanup()
       forget(ev.buf)
     end,
   })
+  vim.api.nvim_create_autocmd('BufWipeout', {
+    group = cleanup_group,
+    pattern = 'shortcut://epic/*',
+    desc = 'shortcut.nvim: forget saved <CR> mappings',
+    callback = function(ev)
+      previous_cr[ev.buf] = nil
+    end,
+  })
+end
+
+local CR = vim.keycode('<CR>')
+
+--- The normal-mode `<CR>` mapping in a list from `nvim_get_keymap()`/`nvim_buf_get_keymap()`.
+---@param maps table[]
+---@return table?
+local function find_cr(maps)
+  for _, m in ipairs(maps) do
+    if type(m.lhs) == 'string' and vim.keycode(m.lhs) == CR then
+      return m
+    end
+  end
+  return nil
+end
+
+--- Run a mapping (as returned by `nvim_get_keymap()`) as if its keys had been typed.
+---@param m table
+local function replay(m)
+  local mode = m.noremap == 1 and 'n' or 'm'
+  local keys ---@type string?
+  if m.callback then
+    if m.expr ~= 1 then
+      return m.callback()
+    end
+    keys = m.callback()
+    if type(keys) ~= 'string' then
+      return
+    end
+    if m.replace_keycodes == 1 then
+      keys = vim.keycode(keys)
+    end
+  elseif m.expr == 1 then
+    keys = vim.fn.eval(m.rhs)
+  else
+    keys = vim.keycode(m.rhs or '')
+  end
+  if vim.v.count > 0 and m.expr ~= 1 then
+    keys = vim.v.count .. keys
+  end
+  vim.api.nvim_feedkeys(keys, mode, false)
+end
+
+--- Set our `<CR>` mapping in `buf`, remembering a buffer-local one that was there before.
+---@param buf integer
+local function map_cr(buf)
+  local existing = find_cr(vim.api.nvim_buf_get_keymap(buf, 'n'))
+  if existing and existing.desc ~= M.CR_DESC then
+    previous_cr[buf] = existing
+  end
+  vim.keymap.set('n', '<CR>', M.open_at_cursor, { buffer = buf, desc = M.CR_DESC })
+end
+
+--- What `<CR>` would do without our mapping: the buffer-local mapping it replaced, else a
+--- global one, else Neovim's built-in `<CR>`.
+local function fallback_cr()
+  local m = previous_cr[vim.api.nvim_get_current_buf()] or find_cr(vim.api.nvim_get_keymap('n'))
+  if m then
+    local ok, err = pcall(replay, m)
+    if not ok then
+      require('shortcut.notify').error(tostring(err))
+    end
+    return
+  end
+  vim.cmd.normal({ vim.v.count1 .. CR, bang = true })
 end
 
 --- The snapshot of a loaded epic buffer, or `nil`.
@@ -501,14 +592,14 @@ end
 
 --- `<CR>` in an epic buffer: open the `sc-<id>` on the cursor line in the current window. A
 --- story of the epic opens directly; any other ID is looked up like `:e sc-<id>`. On a line
---- without one, `<CR>` does what it normally does.
+--- without one, `<CR>` does what it did before: the buffer-local or global `<CR>` mapping it
+--- replaced, if any, else Neovim's built-in `<CR>`.
 function M.open_at_cursor()
   local cursor = vim.api.nvim_win_get_cursor(0)
   local line = vim.api.nvim_get_current_line()
   local id = M.id_at(line, cursor[2])
   if not id then
-    vim.cmd.normal({ vim.v.count1 .. vim.keycode('<CR>'), bang = true })
-    return
+    return fallback_cr()
   end
   local snap = snapshots[vim.api.nvim_get_current_buf()]
   local is_story = false
@@ -702,10 +793,7 @@ M.handler = {
         -- Without the `file:line: ` prefix of the error.
         return done((tostring(apply_err):gsub('^[^\n]-:%d+: ', '', 1)))
       end
-      vim.keymap.set('n', '<CR>', M.open_at_cursor, {
-        buffer = buf,
-        desc = 'shortcut.nvim: open the sc-<id> on this line',
-      })
+      map_cr(buf)
       done()
       for _, win in ipairs(vim.fn.win_findbuf(buf)) do
         pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })

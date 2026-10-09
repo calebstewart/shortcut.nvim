@@ -140,7 +140,15 @@ T['render()']['groups stories by state across workflows'] = function()
       { id = 407, line = 32 },
       { id = 405, line = 35 },
     },
-    counts = { total = 6, backlog = 0, unstarted = 2, started = 2, done = 2, unknown = 0 },
+    counts = {
+      total = 6,
+      backlog = 0,
+      unstarted = 2,
+      started = 2,
+      done = 2,
+      unknown = 0,
+      other = {},
+    },
   })
 end
 
@@ -231,7 +239,38 @@ T['render()']['backlog states come first and are counted apart'] = function()
     '- sc-407 Finished API · Alex.Smith · 5pt',
     '',
   })
-  eq(r.meta.counts, { total = 6, backlog = 1, unstarted = 2, started = 2, done = 1, unknown = 0 })
+  eq(r.meta.counts, {
+    total = 6,
+    backlog = 1,
+    unstarted = 2,
+    started = 2,
+    done = 1,
+    unknown = 0,
+    other = {},
+  })
+end
+
+T['render()']['states of unrecognised types are counted by type, grouped by name'] = function()
+  local r = render(
+    [[s[7].workflow_state_id = 508; s[5].workflow_state_id = 507; s[1].workflow_state_id = 998]],
+    [[vim.tbl_extend('force', _G.refs, {
+      state = function(id)
+        if id == 508 then return { id = 508, name = 'Parked', type = 'paused', position = 1 } end
+        if id == 507 then return { id = 507, name = 'Untyped', type = '', position = 0 } end
+        return _G.refs.state(id)
+      end,
+    })]]
+  )
+  eq(r.lines[9], 'stories: 6 (0 done, 1 started, 2 unstarted, 1 paused, 2 unknown)')
+  eq(r.meta.counts.other, { paused = 1 })
+  eq(r.meta.counts.unknown, 2)
+  -- Grouped under their real names, after the known types.
+  eq(
+    vim.tbl_map(function(g)
+      return g.name
+    end, r.meta.groups),
+    { 'Backlog', 'To Do', 'In Progress', 'Untyped', 'Parked', 'unknown-998' }
+  )
 end
 
 T['render()']['an empty epic'] = function()
@@ -267,7 +306,15 @@ T['render()']['an empty epic'] = function()
   eq(r.meta.description, { first = 14, last = 13 })
   eq(r.meta.groups, {})
   eq(r.meta.stories, {})
-  eq(r.meta.counts, { total = 0, backlog = 0, unstarted = 0, started = 0, done = 0, unknown = 0 })
+  eq(r.meta.counts, {
+    total = 0,
+    backlog = 0,
+    unstarted = 0,
+    started = 0,
+    done = 0,
+    unknown = 0,
+    other = {},
+  })
   -- Without a story list at all.
   local lines = child.lua_get([[epic.render(decode('epic_render'), nil, _G.refs)]])
   eq(lines[9], 'stories: 0')
@@ -582,6 +629,47 @@ T['buffer']['<CR> on another sc-<id> looks it up; elsewhere it moves down'] = fu
   wait_for('shortcut://story/301')
   eq(child.api.nvim_buf_get_name(0), 'shortcut://story/301')
   eq(messages(), {})
+end
+
+T['buffer']['<CR> on lines without an ID runs the <CR> mapping it replaced'] = function()
+  -- A global mapping.
+  child.lua([[
+    _G.global_hits = 0
+    vim.keymap.set('n', '<CR>', function() _G.global_hits = _G.global_hits + 1 end)
+  ]])
+  edit('shortcut://epic/202')
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('<CR>')
+  eq(child.lua_get('_G.global_hits'), 1)
+  eq(child.api.nvim_win_get_cursor(0), { 12, 0 })
+  -- Story lines still open the story.
+  child.api.nvim_win_set_cursor(0, { 29, 0 })
+  child.type_keys('<CR>')
+  wait_for('shortcut://story/401')
+  eq(child.lua_get('_G.global_hits'), 1)
+
+  -- A buffer-local mapping from a markdown plugin (string rhs, with a count) wins over it, and
+  -- is kept across :e!.
+  child.lua([[
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'markdown',
+      command = 'nnoremap <buffer> <CR> :<C-U>let g:md_hits = get(g:, "md_hits", 0) + v:count1<CR>',
+    })
+  ]])
+  child.cmd('bwipeout! shortcut://epic/202')
+  edit('shortcut://epic/202')
+  eq(lines(), FULL)
+  child.cmd('edit!')
+  child.lua('_G.wait_loaded()')
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('3<CR>')
+  eq(child.lua_get('vim.g.md_hits'), 3)
+  eq(child.lua_get('_G.global_hits'), 1)
+  eq(child.api.nvim_win_get_cursor(0), { 12, 0 })
+  eq(
+    child.lua_get([[vim.fn.maparg('<CR>', 'n', false, true).desc]]),
+    'shortcut.nvim: open the sc-<id> on this line'
+  )
 end
 
 T['buffer']['gf on a story line opens the story'] = function()

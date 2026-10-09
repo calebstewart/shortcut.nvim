@@ -6,8 +6,9 @@
 --- API facts (OpenAPI spec, see `shortcut.api`):
 ---   - `GET /workflows` (listWorkflows): `Workflow[]`, each with `states` (`WorkflowState`:
 ---     `id`, `name`, `type`, `position`, optional `color`). `type` is `unstarted`, `started` or
----     `done`, or (not in the spec, but seen in real workspaces) `backlog`. State names are unique only within a workflow; a workflow belongs to a team
----     (`team_id`), and groups list theirs in `workflow_ids`.
+---     `done`, or (not in the spec, but seen in real workspaces) `backlog`. State names are
+---     unique only within a workflow; a workflow belongs to a team (`team_id`), and groups list
+---     theirs in `workflow_ids`.
 ---   - `GET /epic-workflow` (getEpicWorkflow): one `EpicWorkflow` object (not a list) with
 ---     `epic_states` (`EpicState`: `id`, `name`, `type`, `position`) and
 ---     `default_epic_state_id`.
