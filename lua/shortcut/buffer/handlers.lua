@@ -6,8 +6,8 @@
 --- every window showing it to the canonical buffer and then deletes it.
 ---
 --- How objects are loaded and saved is pluggable: renderers call `register()` for their kind.
---- Stories are handled by `shortcut.buffer.story`, loaded on first use; epics use a placeholder
---- until their renderer exists.
+--- Stories are handled by `shortcut.buffer.story` and epics by `shortcut.buffer.epic`, each
+--- loaded on first use.
 local notify = require('shortcut.notify')
 local uri = require('shortcut.uri')
 
@@ -49,23 +49,6 @@ local CHAINED_INCLUDEEXPR =
   "v:lua.require'shortcut.buffer.handlers'.includeexpr(v:fname, b:shortcut_includeexpr)"
 local PLURAL = { story = 'stories', epic = 'epics' }
 
----@param kind shortcut.Kind
----@return shortcut.buffer.Handler
-local function placeholder(kind)
-  return {
-    load = function(_, id, _, done)
-      done(nil, {
-        ('# %s %d'):format(kind == 'story' and 'Story' or 'Epic', id),
-        '',
-        ('Rendering %s is not implemented yet.'):format(PLURAL[kind]),
-      })
-    end,
-    save = function(_, _, _, done)
-      done(('saving %s is not supported yet'):format(PLURAL[kind]))
-    end,
-  }
-end
-
 --- A handler that requires `module` (exporting `handler`) only when first used, so nothing
 --- heavy is loaded at startup.
 ---@param module string
@@ -81,14 +64,18 @@ local function lazy(module)
     save = function(...)
       return assert(get().save)(...)
     end,
+    -- Handlers without `jump` (epics have no comments to jump to) ignore it.
     jump = function(...)
-      return assert(get().jump)(...)
+      local jump = get().jump
+      if jump then
+        return jump(...)
+      end
     end,
   }
 end
 
 ---@type table<shortcut.Kind, shortcut.buffer.Handler>
-local registry = { story = lazy('shortcut.buffer.story'), epic = placeholder('epic') }
+local registry = { story = lazy('shortcut.buffer.story'), epic = lazy('shortcut.buffer.epic') }
 
 --- The default resolver: `GET /stories/<id>`, and on 404 `GET /epics/<id>`.
 ---

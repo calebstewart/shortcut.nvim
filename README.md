@@ -163,9 +163,6 @@ Other ways of naming it switch to that buffer:
 
 After the switch, `<C-^>` returns to the buffer you came from.
 
-> [!NOTE]
-> Epic buffers are not rendered yet: they only show the epic's ID.
-
 ## Story buffers
 
 A story opens as a Markdown buffer (filetype `markdown`; both Neovim's Markdown syntax and its
@@ -228,6 +225,62 @@ Description…
 - A link to a comment (`…/story/<id>/<slug>#activity-<comment id>`) puts the cursor on it.
 - `:e!` fetches the story again. Editing (`:w`) is not available yet: it reports so and keeps
   your changes in the buffer.
+
+## Epic buffers
+
+An epic opens as a read-only Markdown buffer listing its stories, grouped by workflow state:
+
+```markdown
+---
+id: 678
+state: In Progress
+owners: [someone]
+teams: [Platform]
+labels: [q4]
+planned_start: 2026-10-01
+deadline: 2026-12-15
+stories: 14 (6 done, 5 started, 3 unstarted)
+url: https://app.shortcut.com/<workspace>/epic/678
+---
+# Epic name
+
+Description…
+
+<!-- shortcut:stories -->
+## Stories
+
+### In Progress
+- sc-12345 Story title · someone · 3pt
+- sc-12346 Another story · unowned
+
+### Done
+- sc-12347 Finished story · someone, someone-else · 1pt
+```
+
+- **Header**, in this order: `id`; `state` (the epic state's name, from the epic workflow);
+  `owners` (mention names); `teams` (team names); `labels`; `planned_start` and `deadline`
+  (dates, empty when not set); `stories`, a summary of the story list: how many stories,
+  and how many are done, started and unstarted. When there are any, it also counts stories in
+  backlog states (`N backlog`), in states of any other type (`N <type>`), and in states that
+  can't be looked up (`N unknown`). An empty epic shows just `0`. `url` is the epic's link
+  in the web app. Names and `unknown-<id>` work as in story buffers.
+- **Stories** are grouped under `### <state name>`. An epic's stories may come from several
+  workflows: groups are ordered by state type (backlog, unstarted, started, then done), then
+  by the state's position in its workflow, and states with the same name share one group.
+  States of other types come after those, and stories in a state that can't be looked up
+  come last, under `### unknown-<id>`. Within a
+  group, stories are in Shortcut's order. Each line reads
+  `- sc-<id> <title> · <owners, or "unowned"> · <estimate>pt` (no estimate part when the
+  story has none). Archived stories are left out. An epic without stories shows
+  `*No stories.*`.
+- **`<CR>`** on a line containing `sc-<id>` opens it in the current window (the `sc-<id>`
+  under the cursor, else the first on the line): on a story line, that story. On any other
+  line `<CR>` does what it did before: the `<CR>` mapping it replaced (buffer-local, e.g.
+  from a Markdown plugin, or global), else Neovim's own `<CR>`. **`gf`** on `sc-<id>` works
+  too, as everywhere.
+- Modelines are disabled, as in story buffers.
+- `:e!` fetches the epic and its stories again. Editing (`:w`) is not available: it reports
+  so and keeps your changes in the buffer.
 
 ## Development
 

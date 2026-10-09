@@ -1,0 +1,111 @@
+[
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/401",
+    "archived": false,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": 3,
+    "id": 401,
+    "name": "Backend work",
+    "owner_ids": [
+      "00000000-0000-4000-8000-000000000101"
+    ],
+    "position": 20,
+    "story_type": "feature",
+    "workflow_id": 500,
+    "workflow_state_id": 502
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/402",
+    "archived": false,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": null,
+    "id": 402,
+    "name": "Design mockups",
+    "owner_ids": [
+      "00000000-0000-4000-8000-000000000102",
+      "00000000-0000-4000-8000-000000000101"
+    ],
+    "position": 10,
+    "story_type": "feature",
+    "workflow_id": 510,
+    "workflow_state_id": 512
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/403",
+    "archived": false,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": 0,
+    "id": 403,
+    "name": "Write spec",
+    "owner_ids": [],
+    "position": 5,
+    "story_type": "chore",
+    "workflow_id": 500,
+    "workflow_state_id": 501
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/404",
+    "archived": false,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": 2,
+    "id": 404,
+    "name": "Pick colours",
+    "owner_ids": [],
+    "position": 1,
+    "story_type": "feature",
+    "workflow_id": 510,
+    "workflow_state_id": 511
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/405",
+    "archived": false,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": 1,
+    "id": 405,
+    "name": "Ship it",
+    "owner_ids": [
+      "00000000-0000-4000-8000-000000000101"
+    ],
+    "position": 3,
+    "story_type": "feature",
+    "workflow_id": 510,
+    "workflow_state_id": 513
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/406",
+    "archived": true,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": 1,
+    "id": 406,
+    "name": "Old thing",
+    "owner_ids": [
+      "00000000-0000-4000-8000-000000000101"
+    ],
+    "position": 2,
+    "story_type": "feature",
+    "workflow_id": 500,
+    "workflow_state_id": 503
+  },
+  {
+    "app_url": "https://app.shortcut.com/example-workspace/story/407",
+    "archived": false,
+    "entity_type": "story",
+    "epic_id": 202,
+    "estimate": 5,
+    "id": 407,
+    "name": "Finished API",
+    "owner_ids": [
+      "00000000-0000-4000-8000-000000000102"
+    ],
+    "position": 4,
+    "story_type": "bug",
+    "workflow_id": 500,
+    "workflow_state_id": 503
+  }
+]
