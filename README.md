@@ -85,8 +85,10 @@ places, in order, and uses the first token it finds:
 3. **The [`short` CLI](https://github.com/shortcut-cli/shortcut-cli)'s config file.** If you
    have run `short install`, there is nothing else to do. The file is found exactly where
    `short` looks for it: `~/.config/shortcut-cli/config.json` by default, or
-   `$XDG_CONFIG_HOME/shortcut-cli/config.json` when `XDG_CONFIG_HOME` is set. Set
-   `cli_config_path` to use a different file.
+   `$XDG_CONFIG_HOME/shortcut-cli/config.json` when `XDG_CONFIG_HOME` is set. (Like `short`,
+   when `XDG_CONFIG_HOME` is unset but `XDG_DATA_HOME` is set, it uses
+   `$XDG_DATA_HOME/.config/shortcut-cli/config.json`.) Set `cli_config_path` to use a different
+   file; `require('shortcut.auth').cli_config_path()` shows the path in use.
 
 Your mention name and workspace URL slug are read from the `short` config file when its token
 is the one in use.
