@@ -9,6 +9,9 @@
 ---
 --- Every problem is collected, with its line; nothing may be sent if there is any.
 ---
+--- `create()` does the same for a new story's draft: the whole `POST /stories` body, with names
+--- looked up the same way.
+---
 --- Pure: names are resolved through the `lookup` functions given (`shortcut.cache`'s in the
 --- editor), and no buffer or editor state is used.
 local M = {}
@@ -140,6 +143,71 @@ local function member_ids(mentions, lookup, known, current, err)
   return ok and ids or nil
 end
 
+--- The iteration ID of an `iteration` header value: `nil` when empty. An integer is an ID if
+--- there is such an iteration, else a name.
+---@param v string|integer|nil
+---@param lookup shortcut.story_diff.Lookup
+---@param err fun(msg: string)
+---@return integer? id
+---@return boolean ok `false` if it could not be resolved.
+local function iteration_id(v, lookup, err)
+  if v == nil or v == '' then
+    return nil, true
+  end
+  if type(v) == 'number' and lookup.iteration(v) then
+    return v, true
+  end
+  local it, lookup_err = lookup.iteration_by_name(tostring(v))
+  if not it then
+    err(lookup_err or ("unknown iteration '%s'"):format(tostring(v)))
+    return nil, false
+  end
+  return it.id, true
+end
+
+--- The labels of a `labels` header value, as IDs and as the `CreateLabelParams` that set them.
+--- Only existing labels: setting labels by name creates missing ones, so an unknown name is an
+--- error instead.
+---@param wanted string[] Label names.
+---@param own table[] Labels the story has (`LabelSlim`): known even if the cache is out of date.
+---@param lookup shortcut.story_diff.Lookup
+---@param err fun(msg: string)
+---@return integer[] ids
+---@return { name: string }[] params
+---@return boolean ok `false` if any could not be resolved.
+local function label_params(wanted, own, lookup, err)
+  local by_name = {} ---@type table<string, { id: integer, name: string }>
+  for _, l in ipairs(own) do
+    if type(l) == 'table' and present(l.id) and type(l.name) == 'string' then
+      by_name[l.name:lower()] = by_name[l.name:lower()] or l
+    end
+  end
+  local params, ids, seen, ok = {}, {}, {}, true
+  for _, name in ipairs(wanted) do
+    local label, lookup_err = by_name[name:lower()], nil ---@type { id: integer, name: string }?, string?
+    if not label then
+      label, lookup_err = lookup.label_by_name(name)
+    end
+    if not label then
+      ok = false
+      if unknown_id(name) then
+        err(
+          ("label '%s' has no known name, so the labels cannot be saved; remove it or :e! to reload"):format(
+            name
+          )
+        )
+      else
+        err(lookup_err or ("unknown label '%s'"):format(name))
+      end
+    elseif not seen[label.id] then
+      seen[label.id] = true
+      table.insert(ids, label.id)
+      table.insert(params, { name = label.name })
+    end
+  end
+  return ids, params, ok
+end
+
 --- Compute the changes, and the problems that keep them from being sent.
 ---@param orig shortcut.story_parse.Story The parse of the original render.
 ---@param cur shortcut.story_parse.Story The parse of the edited buffer.
@@ -240,23 +308,8 @@ function M.diff(orig, cur, ctx)
   end
 
   if changed('iteration') then
-    local v = ch.iteration
     local old = present(s.iteration_id) and s.iteration_id or nil
-    local id ---@type integer?
-    local ok = true
-    if v == nil or v == '' then
-      id = nil
-    elseif type(v) == 'number' and lookup.iteration(v) then
-      id = v
-    else
-      local it, lookup_err = lookup.iteration_by_name(tostring(v))
-      if it then
-        id = it.id
-      else
-        ok = false
-        field_err('iteration')(lookup_err or ("unknown iteration '%s'"):format(tostring(v)))
-      end
-    end
+    local id, ok = iteration_id(ch.iteration, lookup, field_err('iteration'))
     if ok and id ~= old then
       body.iteration_id = id or vim.NIL
       mark('iteration')
@@ -272,38 +325,7 @@ function M.diff(orig, cur, ctx)
   end
 
   if changed('labels') then
-    local e = field_err('labels')
-    -- The story's own labels first: they are known even if the cache is out of date.
-    local own = {} ---@type table<string, { id: integer, name: string }>
-    for _, l in ipairs(list_of(s.labels)) do
-      if type(l) == 'table' and present(l.id) and type(l.name) == 'string' then
-        own[l.name:lower()] = own[l.name:lower()] or l
-      end
-    end
-    local names, ids, seen, ok = {}, {}, {}, true
-    for _, name in ipairs(ch.labels) do
-      local label, lookup_err = own[name:lower()], nil ---@type { id: integer, name: string }?, string?
-      if not label then
-        label, lookup_err = lookup.label_by_name(name)
-      end
-      if not label then
-        ok = false
-        if unknown_id(name) then
-          e(
-            ("label '%s' has no known name, so the labels cannot be saved; remove it or :e! to reload"):format(
-              name
-            )
-          )
-        else
-          -- Saving labels by name creates missing ones: refuse instead.
-          e(lookup_err or ("unknown label '%s'"):format(name))
-        end
-      elseif not seen[label.id] then
-        seen[label.id] = true
-        table.insert(ids, label.id)
-        table.insert(names, { name = label.name })
-      end
-    end
+    local ids, names, ok = label_params(ch.labels, list_of(s.labels), lookup, field_err('labels'))
     local current = list_of(s.label_ids)
     if type(s.label_ids) ~= 'table' then
       current = vim.tbl_map(function(l)
@@ -483,6 +505,100 @@ function M.diff(orig, cur, ctx)
     return a.message < b.message
   end)
   return changes, errors
+end
+
+---@class shortcut.story_diff.CreateContext
+---@field workflow_id integer The workflow the state is looked up in.
+---@field group_id? string The team to assign (`group_id`).
+---@field lookup shortcut.story_diff.Lookup
+
+---@class shortcut.story_diff.Create
+---@field body table `CreateStoryParams`: every field that is set, with the tasks.
+---@field epic? { id: integer, line: integer } The epic, to check exists before creating.
+
+--- What creating a story from a parsed draft must send: a full `POST /stories` body. Names are
+--- looked up as when editing (`diff()`), with nothing known beforehand: an `unknown-<id>`
+--- placeholder is an unknown name, and a disabled member is an error.
+---@param cur shortcut.story_parse.Story The parse of the draft (`draft = true`).
+---@param ctx shortcut.story_diff.CreateContext
+---@return shortcut.story_diff.Create create
+---@return shortcut.story_parse.Error[] errors Sorted by line.
+function M.create(cur, ctx)
+  local lookup = ctx.lookup
+  local h = cur.header
+  local errors = {} ---@type shortcut.story_parse.Error[]
+  ---@param key string
+  ---@return fun(msg: string)
+  local function field_err(key)
+    return function(msg)
+      table.insert(
+        errors,
+        { line = cur.key_lines[key] or cur.header_end, message = ('%s: %s'):format(key, msg) }
+      )
+    end
+  end
+  local body = { name = cur.title } ---@type table
+  local out = { body = body } ---@type shortcut.story_diff.Create
+
+  if cur.description ~= '' then
+    body.description = cur.description
+  end
+  if h.type then
+    body.story_type = h.type
+  end
+  if h.state then
+    local state, lookup_err = lookup.state_by_name(ctx.workflow_id, h.state)
+    if state then
+      body.workflow_state_id = state.id
+    else
+      field_err('state')(lookup_err or ("unknown state '%s'"):format(h.state))
+    end
+  end
+  if #h.owners > 0 then
+    body.owner_ids = member_ids(h.owners, lookup, {}, {}, field_err('owners'))
+  end
+  if h.epic then
+    body.epic_id = h.epic.id
+    out.epic = { id = h.epic.id, line = cur.key_lines.epic or cur.header_end }
+  end
+  local iteration = iteration_id(h.iteration, lookup, field_err('iteration'))
+  if iteration then
+    body.iteration_id = iteration
+  end
+  if h.estimate then
+    body.estimate = h.estimate
+  end
+  if #h.labels > 0 then
+    local _, params, ok = label_params(h.labels, {}, lookup, field_err('labels'))
+    if ok then
+      body.labels = params
+    end
+  end
+  if ctx.group_id then
+    body.group_id = ctx.group_id
+  end
+
+  local tasks = {}
+  for _, t in ipairs(cur.tasks) do
+    local task = { description = t.description, complete = t.complete }
+    if #t.owners > 0 then
+      task.owner_ids = member_ids(t.owners, lookup, {}, {}, function(msg)
+        table.insert(errors, { line = t.line, message = msg })
+      end)
+    end
+    table.insert(tasks, task)
+  end
+  if #tasks > 0 then
+    body.tasks = tasks
+  end
+
+  table.sort(errors, function(a, b)
+    if a.line ~= b.line then
+      return a.line < b.line
+    end
+    return a.message < b.message
+  end)
+  return out, errors
 end
 
 --- A short description of the changes, e.g. `title, state, 1 task updated, 2 tasks deleted`.

@@ -47,6 +47,9 @@ local M = {}
 --- Header fields, in order.
 M.FIELDS = { 'id', 'type', 'state', 'owners', 'epic', 'iteration', 'estimate', 'labels', 'url' }
 
+--- Header fields of a new story's draft (`shortcut.buffer.story_create`): no `id` or `url` yet.
+M.DRAFT_FIELDS = { 'type', 'state', 'owners', 'epic', 'iteration', 'estimate', 'labels' }
+
 M.TASKS_MARKER = '<!-- shortcut:tasks -->'
 M.COMMENTS_MARKER = '<!-- shortcut:comments (read-only) -->'
 
@@ -575,10 +578,22 @@ end
 --- to a marker, but task and comment lines never do (they start with `- [`, `>`, `**@` or
 --- `*(`), so the **last** comments marker, and the last tasks marker before it, are the real
 --- ones. Lines are compared without surrounding whitespace.
+---
+--- A draft (`opts.draft`) has no comments section: its tasks run to the last line, the last
+--- tasks marker is the real one, and `comments_marker` is one past the last line.
 ---@param lines string[]
+---@param opts? { draft?: boolean }
 ---@return { tasks_marker: integer, comments_marker: integer }? markers 1-based line numbers.
 ---@return string? err If a marker is missing.
-function M.sections(lines)
+function M.sections(lines, opts)
+  if opts and opts.draft then
+    for i = #lines, 1, -1 do
+      if vim.trim(lines[i]) == M.TASKS_MARKER then
+        return { tasks_marker = i, comments_marker = #lines + 1 }
+      end
+    end
+    return nil, ("the line '%s' is missing (it must come before the tasks)"):format(M.TASKS_MARKER)
+  end
   local tasks, comments ---@type integer?, integer?
   for i = #lines, 1, -1 do
     local line = vim.trim(lines[i])

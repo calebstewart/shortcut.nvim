@@ -10,12 +10,17 @@
 --- `shortcut://story/<id>/comment` names the buffer of a comment being written (see
 --- `shortcut.buffer.comment`); `parse()` rejects it, `comment_name()`/`parse_comment_name()`
 --- handle it.
+---
+--- `shortcut://story/new-<n>` names a draft of a new story (see `shortcut.buffer.story_create`):
+--- `parse()` returns it as kind `'draft'`, with `id` the draft's number. Only `:Shortcut create`
+--- makes such buffers; it is not an object on Shortcut, and is never loaded from there.
 local M = {}
 
 ---@alias shortcut.Kind 'story'|'epic'
 
 ---@class shortcut.uri.Target
----@field kind shortcut.Kind|'id' `'id'` when the kind is not known yet (`sc-<id>`).
+---@field kind shortcut.Kind|'id'|'draft' `'id'` when the kind is not known yet (`sc-<id>`),
+--- `'draft'` for a new story's draft (`shortcut://story/new-<n>`, `id` is `n`).
 ---@field id integer
 ---@field workspace? string Workspace slug, for web URLs only.
 ---@field comment? integer Comment ID from a web URL fragment.
@@ -112,6 +117,11 @@ function M.parse(str)
     return nil
   end
 
+  local draft = to_id(str:match('^shortcut://story/new%-(%d+)$'))
+  if draft then
+    return { kind = 'draft', id = draft }
+  end
+
   return parse_web(str)
 end
 
@@ -139,6 +149,13 @@ function M.parse_comment_name(str)
     return nil
   end
   return to_id(str:match('^shortcut://story/(%d+)/comment$'))
+end
+
+--- The name of the buffer of draft number `n` of a new story.
+---@param n integer
+---@return string
+function M.draft_name(n)
+  return ('shortcut://story/new-%d'):format(n)
 end
 
 --- Whether `kind` is a real object kind (not `'id'`).

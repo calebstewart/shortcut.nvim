@@ -544,6 +544,14 @@ function M.workflows()
   return entry and entry.data or nil
 end
 
+--- A whole list, as last loaded, or `nil` if it is not loaded (e.g. for completion).
+---@param kind shortcut.refs.Kind
+---@return any?
+function M.list(kind)
+  local entry = loaded(kind)
+  return entry and entry.data or nil
+end
+
 --- A workflow by ID.
 ---@param id integer
 ---@return shortcut.refs.Workflow?

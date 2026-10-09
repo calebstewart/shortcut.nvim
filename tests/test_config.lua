@@ -36,6 +36,7 @@ T['defaults apply without setup()'] = function()
     picker = { page_size = 25, max_results = 200 },
     http = { timeout = 30 },
     tasks = { show_owners = true, confirm_delete = true },
+    create = {},
   })
   eq(messages(), {})
 end
@@ -125,6 +126,28 @@ T['tasks.confirm_delete must be a boolean'] = function()
   expect.no_error(function()
     assert(messages()[1].msg:find('tasks.confirm_delete', 1, true))
   end)
+end
+
+T['create: workflow, team and template'] = function()
+  eq(setup({ create = { workflow = 'Engineering', team = 'platform' } }), true)
+  eq(get().create, { workflow = 'Engineering', team = 'platform' })
+  eq(setup({ create = { workflow = 500 } }), true)
+  eq(get().create.workflow, 500)
+  eq(child.lua_get([[config.setup({ create = { template = function(f) return f end } })]]), true)
+  eq(child.lua_get([[type(config.get().create.template)]]), 'function')
+  for _, bad in ipairs({
+    { workflow = 1.5 },
+    { workflow = '' },
+    { workflow = true },
+    { team = 3 },
+    { template = 'x' },
+  }) do
+    child.lua('_G.messages = {}')
+    eq(setup({ create = bad }), false)
+    expect.no_error(function()
+      assert(messages()[1].msg:find('create.' .. next(bad), 1, true))
+    end)
+  end
 end
 
 T['setup() rejects a non-table argument'] = function()
