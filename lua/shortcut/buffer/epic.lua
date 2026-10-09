@@ -531,13 +531,19 @@ local function find_cr(maps)
   return nil
 end
 
---- Run a mapping (as returned by `nvim_get_keymap()`) as if its keys had been typed.
+--- Run a mapping (as returned by `nvim_get_keymap()`) as if its keys had been typed after the
+--- count.
+---
+--- Its keys are put at the front of the typeahead (flag `i`), so they run before any keys typed
+--- or fed after `<CR>` (e.g. the rest of a macro). In a remapping rhs, `<CR>` itself is not
+--- remapped: Neovim does not remap a leading lhs (`nmap <CR> <CR>zz`), and remapping a later one
+--- would only re-enter this mapping (where Neovim stops with E223).
 ---@param m table
 local function replay(m)
-  local mode = m.noremap == 1 and 'n' or 'm'
   local keys ---@type string?
   if m.callback then
     if m.expr ~= 1 then
+      -- `v:count` is still set for it.
       return m.callback()
     end
     keys = m.callback()
@@ -552,10 +558,35 @@ local function replay(m)
   else
     keys = vim.keycode(m.rhs or '')
   end
-  if vim.v.count > 0 and m.expr ~= 1 then
-    keys = vim.v.count .. keys
+  ---@cast keys string
+
+  -- Pieces in order: { keys, mode }.
+  local pieces = {} ---@type { [1]: string, [2]: string }[]
+  if vim.v.count > 0 then
+    -- The count was typed before `<CR>`: as with any mapping, it applies to the keys.
+    table.insert(pieces, { tostring(vim.v.count), 'n' })
   end
-  vim.api.nvim_feedkeys(keys, mode, false)
+  if m.noremap == 1 then
+    table.insert(pieces, { keys, 'n' })
+  else
+    local pos = 1
+    while pos <= #keys do
+      local cr = keys:find(CR, pos, true)
+      if not cr then
+        table.insert(pieces, { keys:sub(pos), 'm' })
+        break
+      end
+      if cr > pos then
+        table.insert(pieces, { keys:sub(pos, cr - 1), 'm' })
+      end
+      table.insert(pieces, { CR, 'n' })
+      pos = cr + 1
+    end
+  end
+  -- Each insertion goes in front of the previous one: feed the last piece first.
+  for i = #pieces, 1, -1 do
+    vim.api.nvim_feedkeys(pieces[i][1], pieces[i][2] .. 'i', false)
+  end
 end
 
 --- Set our `<CR>` mapping in `buf`, remembering a buffer-local one that was there before.

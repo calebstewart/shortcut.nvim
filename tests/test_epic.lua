@@ -672,6 +672,60 @@ T['buffer']['<CR> on lines without an ID runs the <CR> mapping it replaced'] = f
   )
 end
 
+--- Count calls to the epic `<CR>` handler, failing after a few so that a loop ends.
+local function count_cr_calls()
+  child.lua([[
+    _G.cr_calls = 0
+    local orig = epic.open_at_cursor
+    epic.open_at_cursor = function()
+      _G.cr_calls = _G.cr_calls + 1
+      if _G.cr_calls > 20 then error('looping') end
+      return orig()
+    end
+  ]])
+end
+
+T['buffer']['<CR> replay: a remapping rhs starting with <CR> does not loop'] = function()
+  count_cr_calls()
+  child.cmd('nmap <CR> <CR>zz')
+  edit('shortcut://epic/202')
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('<CR>')
+  child.lua('vim.wait(20)')
+  eq(child.lua_get('_G.cr_calls'), 1)
+  eq(child.api.nvim_win_get_cursor(0), { 13, 0 })
+  -- Nor does one with <CR> later on (Neovim itself would stop with E223).
+  child.cmd('nmap <CR> j<CR>')
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('<CR>')
+  child.lua('vim.wait(20)')
+  eq(child.lua_get('_G.cr_calls'), 2)
+  eq(child.api.nvim_win_get_cursor(0), { 14, 0 })
+  eq(messages(), {})
+end
+
+T['buffer']['<CR> replay runs before keys typed after it, with the count'] = function()
+  child.cmd('nnoremap <CR> 2j')
+  edit('shortcut://epic/202')
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  -- As in a macro: `x` runs after the move.
+  child.cmd('execute "normal \\<CR>x"')
+  eq(child.api.nvim_win_get_cursor(0), { 14, 0 })
+  eq(lines()[14], 'pic intro.')
+  eq(lines()[12], '# Render Epic')
+  child.cmd('undo')
+
+  -- Expr mappings get the count too.
+  child.lua([[vim.keymap.set('n', '<CR>', function() return 'j' end, { expr = true })]])
+  child.api.nvim_win_set_cursor(0, { 12, 0 })
+  child.type_keys('3<CR>')
+  eq(child.api.nvim_win_get_cursor(0), { 15, 0 })
+  child.cmd([[nnoremap <expr> <CR> 'k']])
+  child.type_keys('2<CR>')
+  eq(child.api.nvim_win_get_cursor(0), { 13, 0 })
+  eq(messages(), {})
+end
+
 T['buffer']['gf on a story line opens the story'] = function()
   edit('shortcut://epic/202')
   child.api.nvim_win_set_cursor(0, { 29, 4 })
