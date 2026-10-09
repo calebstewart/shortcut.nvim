@@ -160,6 +160,15 @@ local function read_cli_config()
   return data, err, paths.file
 end
 
+--- The contents of the `short` CLI config file (or the legacy file it would be migrated from).
+--- Contains the stored token: never display it.
+---@return table? data `nil` with no error if there is no file.
+---@return string? err
+function M.read_cli_config()
+  local data, err = read_cli_config()
+  return data, err
+end
+
 ---@param v any
 ---@return string?
 local function nonempty_string(v)
