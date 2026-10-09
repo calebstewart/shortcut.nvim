@@ -51,14 +51,17 @@ T['startup']['defines :Shortcut without loading feature modules'] = function()
   eq(child.lua_get([[package.loaded['shortcut.config'] == nil]]), true)
   eq(child.lua_get([[package.loaded['shortcut'] == nil]]), true)
   eq(child.lua_get([[package.loaded['shortcut.buffer.commands'] == nil]]), true)
+  eq(child.lua_get([[package.loaded['shortcut.http'] == nil]]), true)
+  eq(child.lua_get([[package.loaded['shortcut.auth'] == nil]]), true)
+  eq(child.lua_get([[package.loaded['shortcut.login'] == nil]]), true)
 end
 
 T['completion'] = new_set()
 
 T['completion']['lists subcommands'] = function()
-  eq(complete('Shortcut '), { 'epic', 'help', 'story' })
+  eq(complete('Shortcut '), { 'epic', 'help', 'login', 'story' })
   add_fake_lazy()
-  eq(complete('Shortcut '), { 'epic', 'fake', 'help', 'story' })
+  eq(complete('Shortcut '), { 'epic', 'fake', 'help', 'login', 'story' })
   eq(complete('Shortcut h'), { 'help' })
   eq(complete('Shortcut! f'), { 'fake' })
 end

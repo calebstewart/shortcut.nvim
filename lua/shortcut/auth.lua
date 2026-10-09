@@ -160,6 +160,15 @@ local function read_cli_config()
   return data, err, paths.file
 end
 
+--- The contents of the `short` CLI config file (or the legacy file it would be migrated from).
+--- Contains the stored token: never display it.
+---@return table? data `nil` with no error if there is no file.
+---@return string? err
+function M.read_cli_config()
+  local data, err = read_cli_config()
+  return data, err
+end
+
 ---@param v any
 ---@return string?
 local function nonempty_string(v)
@@ -264,6 +273,21 @@ function M.resolve()
   ---@type shortcut.auth.Result
   local copy = vim.deepcopy(cache)
   return copy
+end
+
+--- The environment variable a token resolved from the environment came from.
+---@param result shortcut.auth.Result
+---@return string? name E.g. `SHORTCUT_API_TOKEN`; `nil` unless `result.source` is `'env'`.
+function M.env_var(result)
+  if result.source ~= 'env' then
+    return nil
+  end
+  for _, name in ipairs(M.ENV_VARS) do
+    if nonempty_string(env(name)) == result.token then
+      return name
+    end
+  end
+  return nil
 end
 
 --- Forget the resolved token, so the next `resolve()` looks it up again.

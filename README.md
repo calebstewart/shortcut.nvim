@@ -91,9 +91,25 @@ places, in order, and uses the first token it finds:
    file; `require('shortcut.auth').cli_config_path()` shows the path in use.
 
 Your mention name and workspace URL slug are read from the `short` config file when its token
-is the one in use.
+is the one in use; otherwise they are fetched once per session from the API.
+
+### `:Shortcut login`
+
+`:Shortcut login` asks for a token (the input is hidden), checks it against the API, and saves
+it with your mention name and workspace slug to the `short` config file, keeping every other
+setting in it. `short` picks up the same token. If the saved token is for a different
+workspace, you are asked before it is replaced; an invalid token saves nothing. A token from
+`setup()` or `$SHORTCUT_API_TOKEN` still takes precedence over the saved one.
 
 shortcut.nvim never shows the token in messages; at most it shows the last four characters.
+The token is passed to `curl` on its standard input, never on its command line, where other
+users could see it with `ps`.
+
+### Health check
+
+`:checkhealth shortcut` reports the Neovim and `curl` versions, where the token comes from (with
+only its last four characters shown), whether it works (by asking the API who you are), and
+whether snacks.nvim is installed.
 
 ## Commands
 
@@ -101,6 +117,7 @@ shortcut.nvim never shows the token in messages; at most it shows the last four 
 |---|---|
 | `:Shortcut story {id \| sc-<id> \| url}` | Open a story |
 | `:Shortcut epic {id \| sc-<id> \| url}` | Open an epic |
+| `:Shortcut login` | Save an API token to the shared `short` config |
 | `:Shortcut help` | List available subcommands |
 
 ## Opening stories and epics
@@ -109,7 +126,8 @@ Each story or epic is a single buffer named `shortcut://story/<id>` or `shortcut
 Other ways of naming it switch to that buffer:
 
 - `:e https://app.shortcut.com/<workspace>/story/<id>/...` (or `/epic/<id>`): a link copied from
-  the web app. Neovim's built-in download of `https://` files is skipped for these.
+  the web app. Neovim's built-in download of `https://` files is skipped for these. A link to a
+  workspace other than your token's opens with a warning.
 - `:e sc-<id>`: looked up as a story or epic. Turn this off with `sc_ids = false`. Names that
   merely start with `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
   `notes/sc-42`), and files that exist on disk open as normal files.
@@ -126,8 +144,7 @@ After the switch, `<C-^>` returns to the buffer you came from.
 
 > [!NOTE]
 > Rendering is not implemented yet: the buffer only shows the object's kind and ID, and `:w`
-> reports that saving is not supported. Until the API client exists, `sc-<id>` always opens a
-> story.
+> reports that saving is not supported. For now `sc-<id>` always opens a story.
 
 ## Development
 

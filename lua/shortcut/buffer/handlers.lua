@@ -73,8 +73,17 @@ local resolver = nil
 ---@type table<integer, shortcut.Kind>
 local kind_cache = {}
 
+--- The default slug source: the resolved token's workspace (from the `short` config, or else
+--- `GET /member`, cached for the session). Unknown (no warning) if there is no usable token.
+---@type shortcut.buffer.SlugSource
+local function default_slug_source(done)
+  require('shortcut.http').user(function(err, user)
+    done(not err and user and user.url_slug or nil)
+  end)
+end
+
 ---@type shortcut.buffer.SlugSource?
-local slug_source = nil
+local slug_source = default_slug_source
 
 --- Options for the next load of a canonical name, set just before `:edit`ing it.
 ---@type table<string, shortcut.buffer.LoadOpts>
@@ -116,8 +125,8 @@ function M.set_resolver(fn)
   kind_cache = {}
 end
 
---- Set where the user's workspace slug comes from. Without one, opening a URL for another
---- workspace does not warn.
+--- Set where the user's workspace slug comes from. By default it is the API token's workspace;
+--- with `nil`, opening a URL for another workspace does not warn.
 ---@param fn shortcut.buffer.SlugSource?
 function M.set_slug_source(fn)
   vim.validate('fn', fn, 'function', true)
