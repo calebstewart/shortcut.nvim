@@ -873,7 +873,7 @@ T[':w']['an answer that may have created it requires :w! to send again'] = funct
     child.cmd('write')
     eq(#posts(), 1)
     eq(last_message(), {
-      msg = 'shortcut.nvim: not sent: the last attempt may have created the story already. '
+      msg = 'shortcut.nvim: not sent: an earlier attempt may have created the story already. '
         .. 'Check Shortcut; :w! sends it again (possibly creating it twice)',
       level = ERROR,
     })
@@ -888,6 +888,55 @@ T[':w']['an answer that may have created it requires :w! to send again'] = funct
     eq(#posts(), 2)
     eq(child.api.nvim_buf_get_name(0), 'shortcut://story/' .. (900 + i))
   end
+end
+
+T[':w']['every resend after an uncertain attempt needs its own :w!'] = function()
+  open()
+  child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+  child.lua([[_G.fail['POST /stories'] = { status = 502, body = '' }]])
+  child.cmd('write')
+  eq(#posts(), 1)
+  child.lua([[_G.fail['POST /stories'] = nil]])
+  local function refused()
+    child.cmd('write')
+    eq(
+      last_message().msg:find('not sent: an earlier attempt may have created', 1, true) ~= nil,
+      true
+    )
+  end
+
+  -- (a) :w! that fails validation sends nothing, and the flag stays.
+  child.api.nvim_buf_set_lines(0, 9, 10, false, { '# ' })
+  child.cmd('write!')
+  eq(last_message().msg:find('the title cannot be empty', 1, true) ~= nil, true)
+  child.api.nvim_buf_set_lines(0, 9, 10, false, { '# Title' })
+  refused()
+  eq(#posts(), 1)
+
+  -- (b) :w! stopped before the POST: nothing sent, the flag stays.
+  child.lua([[create.WRITE_WAIT = 50; _G.hold['GET /epics/678'] = true]])
+  child.api.nvim_buf_set_lines(0, 4, 5, false, { 'epic: 678' })
+  child.cmd('write!')
+  eq(last_message().msg, 'shortcut.nvim: stopped before the story was sent: nothing was sent')
+  child.lua(
+    'for _, h in ipairs(_G.held) do h() end; _G.held = {}; _G.hold = {}; create.WRITE_WAIT = nil'
+  )
+  refused()
+  eq(#posts(), 1)
+
+  -- (c) :w! refused with a 4xx: says nothing about the first attempt, the flag stays.
+  child.lua([[_G.fail['POST /stories'] = { status = 422, body = '{"message":"bad"}' }]])
+  child.cmd('write!')
+  eq(#posts(), 2)
+  eq(last_message().msg:find('HTTP 422: bad; nothing was created', 1, true) ~= nil, true)
+  child.lua([[_G.fail['POST /stories'] = nil]])
+  refused()
+  eq(#posts(), 2)
+
+  -- Only a created story ends it.
+  child.cmd('write!')
+  child.lua('_G.wait_story(901)')
+  eq(#posts(), 3)
 end
 
 T[':w']['a definite refusal needs no :w!'] = function()

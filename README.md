@@ -485,8 +485,8 @@ Writing a draft:
   read-only, writing it again sends nothing, and `:e!` keeps what is being sent.
 - Only a request refused before it was sent, or answered with a 4xx error, certainly created
   nothing. Any other failure (no answer, a timeout, a server error, a success answer without the
-  story) may have created it: you are told to check Shortcut, and `:w` refuses to send the
-  draft again until you confirm with `:w!`.
+  story) may have created it: you are told to check Shortcut, and from then on `:w` refuses to
+  send the draft again. Each resend needs its own `:w!`, until a story is created from it.
 - Otherwise a draft is an ordinary modified buffer: Neovim's usual rules keep you from losing
   it by accident (`E37`/`E162`), `:q!` and `:bwipeout!` discard it, and `:e!` puts the
   template back.

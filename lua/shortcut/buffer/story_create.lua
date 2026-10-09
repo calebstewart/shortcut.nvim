@@ -29,7 +29,8 @@
 ---     nothing is sent. Once it is sent, the story's buffer opens when it is created.
 ---   - Only a request refused before being sent, or answered with a 4xx, certainly created
 ---     nothing. Any other failure (no answer, a timeout, a 5xx, a 2xx without the story) may have
----     created the story: the draft is kept, and only `:w!` sends it again.
+---     created the story: the draft is kept, and from then on only `:w!` sends it again (each
+---     time, until a story is created from it).
 ---   - Once created, every window showing the draft switches to `shortcut://story/<id>` and the
 ---     draft is wiped.
 ---
@@ -705,6 +706,7 @@ local function create(buf, on_done)
     ---@cast outcome shortcut.create.Outcome
     if outcome.id then
       d.created = outcome.id
+      d.uncertain = nil
     elseif outcome.uncertain then
       d.uncertain = outcome.err
     end
@@ -771,13 +773,14 @@ function M.on_write(ev)
     -- Left modified, so `:wq`/`:x` don't close it.
     notify.error(
       (
-        'not sent: the last attempt may have created the story already. Check Shortcut; '
+        'not sent: an earlier attempt may have created the story already. Check Shortcut; '
         .. ':w! sends it again (possibly creating it twice)'
       )
     )
     return
   end
-  d.uncertain = nil
+  -- `:w!` sends anyway, but the flag stays until a story is created: whatever happens to this
+  -- attempt says nothing about the earlier one, so every resend needs its own `:w!`.
 
   local result ---@type shortcut.create.Outcome?
   local in_write = true
