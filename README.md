@@ -59,7 +59,7 @@ require('shortcut').setup({
   cli_config_path = nil,  -- override path to the `short` CLI's config.json
   cache = { ttl = 24 * 60 * 60 },  -- lookup-list cache lifetime (seconds)
   sc_ids = true,          -- allow `:e sc-<id>`
-  picker = { page_size = 25, max_results = 200 },
+  picker = { page_size = 25, max_results = 200 },  -- page_size: 1 to 250
   http = { timeout = 30 },  -- seconds
 })
 ```
@@ -117,8 +117,9 @@ Stories and epics refer to workflow states, members, labels, teams and iteration
 names (and turn names back into IDs when you edit), shortcut.nvim fetches these lists once and
 caches them, in memory and in `stdpath('cache')/shortcut/<workspace>/refs.json` (e.g.
 `~/.cache/nvim/shortcut/<workspace>/refs.json`). Each workspace has its own file, so switching
-tokens never mixes them up. Lists are refetched after `cache.ttl` seconds (a day by default); if
-that fails, the old copy is used. The file is readable only by you (it contains member names, but
+tokens never mixes them up. After `cache.ttl` seconds (a day by default) a list is refetched in
+the background while the old copy keeps being used, so working offline never makes you wait; a
+failed refetch is retried after a minute. The file is readable only by you (it contains member names, but
 not the token or email addresses). `:checkhealth shortcut` shows how old each list is.
 
 To fetch everything again now (e.g. after adding a label), clear the cache:
