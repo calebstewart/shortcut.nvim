@@ -250,7 +250,9 @@ local function load(buf, target, opts)
   ---@type shortcut.buffer.LoadDone
   local function done(err, lines)
     main_loop(function()
-      if finished or not vim.api.nvim_buf_is_valid(buf) or generation[buf] ~= gen then
+      -- An unloaded buffer must stay unloaded: writing to it would load it again (and start a
+      -- new load). Unloading also bumps the generation, so a later reload ignores this result.
+      if finished or not vim.api.nvim_buf_is_loaded(buf) or generation[buf] ~= gen then
         return
       end
       finished = true
@@ -441,13 +443,14 @@ local function on_write(ev)
   ---@type shortcut.buffer.SaveDone
   local function done(err)
     main_loop(function()
-      if finished or not vim.api.nvim_buf_is_valid(buf) then
+      if finished then
         return
       end
       finished = true
       if err then
+        -- Reported even if the buffer has gone: the changes were not saved.
         notify.error(('failed to save sc-%d: %s'):format(id, err))
-      elseif vim.b[buf].changedtick == tick then
+      elseif vim.api.nvim_buf_is_loaded(buf) and vim.b[buf].changedtick == tick then
         vim.bo[buf].modified = false
       end
     end)
@@ -641,12 +644,22 @@ function M.setup()
     desc = 'shortcut.nvim: open Shortcut URL',
     callback = on_web_read,
   })
+  vim.api.nvim_create_autocmd('BufUnload', {
+    group = group,
+    pattern = 'shortcut://*',
+    callback = function(ev)
+      -- Invalidate any load in flight. Not reset to nil: a reload restarting the count could
+      -- match that load's generation again.
+      generation[ev.buf] = (generation[ev.buf] or 0) + 1
+      load_state[ev.buf] = nil
+    end,
+  })
   vim.api.nvim_create_autocmd('BufWipeout', {
     group = group,
     pattern = 'shortcut://*',
     callback = function(ev)
+      -- Buffer numbers are never reused.
       generation[ev.buf] = nil
-      load_state[ev.buf] = nil
     end,
   })
   -- Plugin managers source plugins in varying orders relative to $VIMRUNTIME/plugin.

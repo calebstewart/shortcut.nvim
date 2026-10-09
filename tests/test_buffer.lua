@@ -280,6 +280,62 @@ T['shortcut://'][':w is refused unless the load succeeded'] = function()
   eq(child.bo.modified, false)
 end
 
+T['shortcut://']['a load finishing after the buffer was unloaded is dropped'] = function()
+  child.lua([[
+    _G.pending = {}
+    handlers.register('story', {
+      load = function(buf, id, opts, done) table.insert(_G.pending, done) end,
+      save = function(buf, id, opts, done) _G.finish_save = done end,
+    })
+  ]])
+  edit('shortcut://story/77')
+  local buf = child.api.nvim_get_current_buf()
+  child.cmd('enew | bdelete #')
+  eq(child.api.nvim_buf_is_loaded(buf), false)
+
+  -- Late results, from the main loop and from a fast event, are ignored.
+  child.lua([[_G.pending[1](nil, { 'late' })]])
+  child.lua([[
+    local timer = vim.uv.new_timer()
+    timer:start(1, 0, function() timer:close(); _G.pending[1](nil, { 'later' }) end)
+    vim.wait(50)
+  ]])
+  eq(child.api.nvim_buf_is_loaded(buf), false)
+  eq(child.lua_get('#_G.pending'), 1)
+  eq(child.v.errmsg, '')
+  eq(messages(), {})
+
+  -- Opening it again loads it normally; the old load still has no effect.
+  edit('shortcut://story/77')
+  eq(child.api.nvim_get_current_buf(), buf)
+  eq(child.lua_get('#_G.pending'), 2)
+  child.lua([[_G.pending[1](nil, { 'stale' })]])
+  eq(lines(), { 'Loading sc-77…' })
+  child.lua([[_G.pending[2](nil, { 'fresh' })]])
+  eq(lines(), { 'fresh' })
+  eq(child.bo.modifiable, true)
+
+  -- A save finishing after the buffer was unloaded doesn't touch it, but failures are reported.
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'edited' })
+  child.cmd('write')
+  child.cmd('enew | bdelete! #')
+  child.lua('_G.finish_save()')
+  eq(child.api.nvim_buf_is_loaded(buf), false)
+  edit('shortcut://story/77')
+  child.lua([[_G.pending[3](nil, { 'reloaded' })]])
+  child.cmd('write')
+  child.cmd('enew | bdelete! #')
+  child.lua('_G.finish_save("offline")')
+  eq(child.api.nvim_buf_is_loaded(buf), false)
+  eq(messages(), {
+    {
+      msg = 'shortcut.nvim: failed to save sc-77: offline',
+      level = child.lua_get('vim.log.levels.ERROR'),
+    },
+  })
+  eq(child.v.errmsg, '')
+end
+
 T['shortcut://']['register() validates its arguments'] = function()
   expect.error(function()
     child.lua([[handlers.register('iteration', { load = function() end })]])
