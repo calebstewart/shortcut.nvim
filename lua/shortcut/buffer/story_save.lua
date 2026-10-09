@@ -62,6 +62,18 @@ local function mark_lines(buf)
   return out
 end
 
+--- The current line of each invalidated task extmark of `buf`: 1-based line -> task IDs.
+---@param buf integer
+---@return table<integer, integer[]>
+local function invalid_lines(buf)
+  local out = {}
+  for _, m in ipairs(story.invalid_task_marks(buf)) do
+    out[m.row + 1] = out[m.row + 1] or {}
+    table.insert(out[m.row + 1], m.id)
+  end
+  return out
+end
+
 --- Work out what saving `buf` would send. Synchronous: uses the lookup lists already loaded.
 ---@param buf integer
 ---@param lookup? shortcut.story_diff.Lookup Defaults to the cache's.
@@ -97,6 +109,7 @@ function M.changes(buf, lookup)
     lookup = lookup or M.cache_lookup(),
     orig_tasks = orig_tasks,
     marks = mark_lines(buf),
+    invalid = invalid_lines(buf),
   })
   vim.list_extend(errors, diff_errors)
   table.sort(errors, function(a, b)
@@ -256,10 +269,11 @@ end
 ---@param epic? shortcut.story.Epic The epic fetched with `fresh`.
 ---@param cur shortcut.story_parse.Story The buffer as saved.
 ---@param marks table<integer, integer> The buffer's task lines -> task IDs (before the save's creations).
+---@param invalid table<integer, integer[]> The buffer's lines -> IDs of tasks whose invalidated mark is there.
 ---@return table story
 ---@return shortcut.story.Refs refs
 ---@return boolean others Whether someone else changed the story.
-function M.baseline(snap, sent, fresh, epic, cur, marks)
+function M.baseline(snap, sent, fresh, epic, cur, marks, invalid)
   local old = snap.story
   local expected = vim.deepcopy(old)
   local others = false
@@ -347,6 +361,7 @@ function M.baseline(snap, sent, fresh, epic, cur, marks)
         lookup = M.cache_lookup(),
         orig_tasks = orig_tasks,
         marks = m,
+        invalid = invalid,
       })
       others = #errors > 0
       for key in pairs(retry.story) do
@@ -555,7 +570,8 @@ local function run(st)
     if not current(st) then
       return msg
     end
-    local base, base_refs, others = M.baseline(st.snap, sent, fresh, epic, cur, mark_lines(buf))
+    local base, base_refs, others =
+      M.baseline(st.snap, sent, fresh, epic, cur, mark_lines(buf), invalid_lines(buf))
     local rebased = story.rebase(buf, base, base_refs, created)
     if rebased then
       st.own[rebased] = true

@@ -119,7 +119,7 @@ end
 --- Render a story, then edit the lines with `edit` and work out the changes. Task marks follow
 --- their lines as long as `edit` only replaces lines in place, unless `marks` is given.
 ---@param edit? fun(lines: string[])
----@param opts? { story?: table, refs?: table, show_owners?: boolean, marks?: table<integer, integer>, lookup?: table }
+---@param opts? { story?: table, refs?: table, show_owners?: boolean, marks?: table<integer, integer>, invalid?: table<integer, integer[]>, lookup?: table }
 ---@return shortcut.story_diff.Changes? changes
 ---@return shortcut.story_parse.Error[] errors
 ---@return string[] lines
@@ -146,6 +146,7 @@ local function changes(edit, opts)
     lookup = opts.lookup or LOOKUP,
     orig_tasks = orig_tasks,
     marks = opts.marks or vim.deepcopy(orig_tasks),
+    invalid = opts.invalid,
   })
   vim.list_extend(errors, diff_errors)
   return result, errors, edited
@@ -795,6 +796,62 @@ T['diff()']['tasks']['lines without a mark are new; tasks without one are delete
   })
   eq(c.story, {})
   eq(diff.summary(c), '2 tasks added, 1 task deleted')
+end
+
+T['diff()']['tasks']['a line without a mark is matched to a task with the same text'] = function()
+  -- Replaced in place: the invalidated mark is on that line.
+  local c = changes(function(lines)
+    lines[23] = '- [x] Open task'
+  end, { marks = { [22] = 311, [24] = 313 }, invalid = { [23] = { 312 } } })
+  eq(assert(c).tasks, {
+    update = { { id = 312, line = 23, description = 'Open task', fields = { complete = true } } },
+    create = {},
+    delete = {},
+  })
+  -- Moved (ddp): the only task left with that text.
+  c = changes(function(lines)
+    lines[22], lines[23] = lines[23], lines[22]
+  end, { marks = { [22] = 312, [24] = 313 }, invalid = { [22] = { 311 } } })
+  eq(assert(c).tasks, NO_TASKS)
+  -- Other text: a new task, and the old one is deleted.
+  c = changes(function(lines)
+    lines[23] = '- [ ] Open task, rewritten'
+  end, { marks = { [22] = 311, [24] = 313 }, invalid = { [23] = { 312 } } })
+  eq(assert(c).tasks, {
+    update = {},
+    create = {
+      { line = 23, fields = { description = 'Open task, rewritten', complete = false } },
+    },
+    delete = { { id = 312, description = 'Open task' } },
+  })
+end
+
+T['diff()']['tasks']['matching by text only when unambiguous'] = function()
+  local s = fixture_story(function(x)
+    x.tasks[2].description = 'Same'
+    x.tasks[3].description = 'Same'
+  end)
+  -- Both lines replaced: each invalidated mark is on its own line.
+  local c = changes(function(lines)
+    lines[22] = '- [ ] Same · @jdoe'
+    lines[23] = '- [x] Same'
+  end, { story = s, marks = { [24] = 313 }, invalid = { [22] = { 311 }, [23] = { 312 } } })
+  eq(assert(c).tasks, {
+    update = {
+      { id = 311, line = 22, description = 'Same', fields = { complete = false } },
+      { id = 312, line = 23, description = 'Same', fields = { complete = true } },
+    },
+    create = {},
+    delete = {},
+  })
+  -- Without marks on those lines, two lines and two tasks with the same text can't be told
+  -- apart: two new tasks, two deleted.
+  c = changes(function(lines)
+    lines[22] = '- [ ] Same · @jdoe'
+    lines[23] = '- [x] Same'
+  end, { story = s, marks = { [24] = 313 }, invalid = { [24] = { 311, 312 } } })
+  eq(#assert(c).tasks.create, 2)
+  eq(#assert(c).tasks.delete, 2)
 end
 
 T['diff()']['tasks']['a mark on a line that is no longer a task deletes the task'] = function()

@@ -546,18 +546,45 @@ T['tasks']['tasks.confirm_delete = false deletes without asking'] = function()
   eq(writes(), { { method = 'DELETE', path = '/stories/301/tasks/312' } })
 end
 
-T['tasks']['ddp reads as a deleted task plus a new one'] = function()
-  child.lua([[require('shortcut').setup({ tasks = { confirm_delete = false } })]])
+T['tasks']['a line replaced or moved by deleting it keeps its task'] = function()
+  -- As checkbox-toggling plugins do: the line is replaced, which invalidates its mark.
+  child.api.nvim_buf_set_lines(0, 22, 23, false, { '- [x] Open task' })
+  eq(#child.lua_get('story.task_marks(0)'), 2)
+  write()
+  eq(child.lua_get('_G.confirms'), {})
+  eq(writes(), { { method = 'PUT', path = '/stories/301/tasks/312', body = { complete = true } } })
+  eq(lines()[23], '- [x] Open task')
+  eq(#child.lua_get('story.task_marks(0)'), 3)
+
+  -- ddp: a move, which is not saved (no question, nothing sent).
+  child.lua('_G.writes = {}')
   child.api.nvim_win_set_cursor(0, { 22, 0 })
   child.cmd('normal! ddp')
+  eq(lines()[23], '- [x] Done task · @jdoe')
+  write()
+  eq(child.lua_get('_G.confirms'), {})
+  eq(writes(), {})
+  eq(last_message(), { msg = 'shortcut.nvim: sc-301: no changes', level = INFO })
+
+  -- ...and edits on the moved line are updates of the same task.
+  set_line(23, '- [ ] Done task · @jdoe')
+  write()
+  eq(child.lua_get('_G.confirms'), {})
+  eq(writes(), { { method = 'PUT', path = '/stories/301/tasks/311', body = { complete = false } } })
+  eq(child.lua_get('#_G.server.tasks'), 3)
+end
+
+T['tasks']['a replaced line with other text is a new task'] = function()
+  child.lua([[require('shortcut').setup({ tasks = { confirm_delete = false } })]])
+  child.api.nvim_buf_set_lines(0, 22, 23, false, { '- [ ] Something else' })
   write()
   eq(writes(), {
     {
       method = 'POST',
       path = '/stories/301/tasks',
-      body = { description = 'Done task', complete = true, owner_ids = { JDOE } },
+      body = { description = 'Something else', complete = false },
     },
-    { method = 'DELETE', path = '/stories/301/tasks/311' },
+    { method = 'DELETE', path = '/stories/301/tasks/312' },
   })
 end
 

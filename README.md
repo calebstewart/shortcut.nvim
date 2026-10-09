@@ -269,9 +269,10 @@ The story is then reloaded (the cursor stays on the same line) and the buffer is
   part of the description. Reordering tasks is not saved. Blank lines are fine there; any other
   line is an error.
 - Tasks are matched to lines by invisible marks, so editing a line in place (`cc`, `:s`,
-  `:move`, inserting text) keeps it the same task. A line that is deleted and put back
-  (`dd` then `p`) counts as a deleted task plus a new one, and so does a copy (`yyp`) as a new
-  one.
+  `:move`, inserting text) keeps it the same task. A line that loses its mark because it was
+  deleted and put back (`dd` then `p`) or replaced (as plugins that toggle checkboxes may do)
+  is matched by its text: to the task whose line was there, or else to the only task left with
+  that description. A copy (`yyp`) is a new task.
 - **Deleting tasks** asks first (unless `tasks.confirm_delete = false`), listing them:
   **Delete** saves everything; **Keep tasks** saves everything else and the tasks come back
   with the reload; **Cancel save** (also `<Esc>`) sends nothing and keeps your edits.

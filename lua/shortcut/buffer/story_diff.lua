@@ -25,6 +25,7 @@ local M = {}
 ---@field lookup shortcut.story_diff.Lookup
 ---@field orig_tasks table<integer, integer> Line of the original render -> task ID.
 ---@field marks table<integer, integer> Line of the edited buffer -> task ID (its valid extmarks).
+---@field invalid? table<integer, integer[]> Line of the edited buffer -> IDs of tasks whose extmark was invalidated (its line deleted) and now sits there.
 
 ---@class shortcut.story_diff.TaskUpdate
 ---@field id integer
@@ -329,16 +330,69 @@ function M.diff(orig, cur, ctx)
     end
   end
 
+  -- Which task each line is: its valid mark, if any. A line without one is matched to a task
+  -- that lost its mark (its line was deleted) if the text is that task's description and the
+  -- match is unambiguous: replacing a line with `nvim_buf_set_lines()` (as checkbox-toggling
+  -- plugins do), `:sort` or `ddp` then don't read as a deleted task plus a new one.
   local kept = {} ---@type table<integer, true>
+  local match = {} ---@type table<shortcut.story_parse.Task, integer>
+  for _, t in ipairs(cur.tasks) do
+    local id = ctx.marks[t.line]
+    if id and not kept[id] and orig_by_id[id] then
+      kept[id] = true
+      match[t] = id
+    end
+  end
+  ---@param t shortcut.story_parse.Task
+  ---@param id integer
+  ---@return boolean
+  local function orphan_of(t, id)
+    local o = orig_by_id[id]
+    return not kept[id] and o ~= nil and o.description == t.description
+  end
+  -- The task whose invalidated mark sits on the line.
+  for _, t in ipairs(cur.tasks) do
+    if not match[t] then
+      local found = vim.tbl_filter(function(id)
+        return orphan_of(t, id)
+      end, (ctx.invalid or {})[t.line] or {})
+      if #found == 1 then
+        kept[found[1]] = true
+        match[t] = found[1]
+      end
+    end
+  end
+  -- The only task left with that description, for the only line left with it.
+  local lines_by_text, tasks_by_text = {}, {} ---@type table<string, shortcut.story_parse.Task[]>, table<string, integer[]>
+  for _, t in ipairs(cur.tasks) do
+    if not match[t] then
+      lines_by_text[t.description] = lines_by_text[t.description] or {}
+      table.insert(lines_by_text[t.description], t)
+    end
+  end
+  for _, t in ipairs(orig.tasks) do
+    local id = ctx.orig_tasks[t.line]
+    if id and not kept[id] then
+      tasks_by_text[t.description] = tasks_by_text[t.description] or {}
+      table.insert(tasks_by_text[t.description], id)
+    end
+  end
+  for text, ts in pairs(lines_by_text) do
+    local ids = tasks_by_text[text]
+    if #ts == 1 and ids and #ids == 1 then
+      kept[ids[1]] = true
+      match[ts[1]] = ids[1]
+    end
+  end
+
   for _, t in ipairs(cur.tasks) do
     local e = function(msg)
       err(t.line, msg)
     end
-    local id = ctx.marks[t.line]
-    local o = id and not kept[id] and orig_by_id[id]
+    local id = match[t]
+    local o = id and orig_by_id[id]
     if o then
       ---@cast id integer
-      kept[id] = true
       local fields = {}
       if t.complete ~= o.complete then
         fields.complete = t.complete

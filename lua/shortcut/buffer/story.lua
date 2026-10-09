@@ -672,7 +672,8 @@ end
 ---     and only the task rendered first keeps it; the others count as deleted,
 ---   - a mark follows its line when it is moved without being deleted (`:move`, `cc`, editing
 ---     the text, `yyp` (the copy is new), `<CR>` at column 0). A line that is deleted and put
----     back elsewhere (`ddp`) loses its mark: it reads as a deleted task plus a new one.
+---     back elsewhere (`ddp`) or replaced (`nvim_buf_set_lines()`) loses its mark; editing then
+---     matches it by its text (see `invalid_task_marks()` and `shortcut.buffer.story_diff`).
 ---@param buf? integer Defaults to the current buffer.
 ---@return { id: integer, row: integer }[]
 function M.task_marks(buf)
@@ -698,6 +699,27 @@ function M.task_marks(buf)
       else
         table.insert(out, { id = task, row = row })
       end
+    end
+  end
+  return out
+end
+
+--- The task extmarks of a buffer that were invalidated (their line was deleted, e.g. replaced
+--- with `nvim_buf_set_lines()`): `{ task_id, row }`, in buffer order. An invalidated mark stays
+--- where its line was, so editing can still match a line put there to its task.
+---@param buf? integer Defaults to the current buffer.
+---@return { id: integer, row: integer }[]
+function M.invalid_task_marks(buf)
+  buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf --[[@as integer]]
+  local snap = snapshots[buf]
+  if not snap then
+    return {}
+  end
+  local out = {} ---@type { id: integer, row: integer }[]
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, M.tasks_ns(), 0, -1, { details = true })) do
+    local task, details = snap.task_marks[mark[1]], mark[4]
+    if task and details and details.invalid then
+      table.insert(out, { id = task, row = mark[2] })
     end
   end
   return out
