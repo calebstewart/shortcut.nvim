@@ -16,7 +16,7 @@
       ];
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      version = "0.1.0-dev";
+      version = "0.1.0";
 
       # Only the files that make up the plugin, so edits to tests/CI/flake don't cause rebuilds.
       pluginSrc = lib.fileset.toSource {
