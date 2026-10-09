@@ -793,7 +793,9 @@ T[':w']['writing elsewhere is refused and sends nothing'] = function()
   }) do
     child.lua('_G.messages = {}')
     -- A message, not a Lua error (which would come with a stack trace).
-    expect.no_error(child.cmd, cmd)
+    expect.no_error(function()
+      child.cmd(cmd)
+    end)
     child.lua('vim.wait(20)')
     eq(#child.lua_get('_G.messages'), 1)
     eq(last_message().level, ERROR)

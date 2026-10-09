@@ -217,7 +217,9 @@ T['comment']['writing it anywhere else posts nothing and writes no file'] = func
   }) do
     child.lua('_G.messages = {}')
     -- A message, not a Lua error (which would come with a stack trace).
-    expect.no_error(child.cmd, cmd)
+    expect.no_error(function()
+      child.cmd(cmd)
+    end)
     child.lua('vim.wait(50)')
     eq({ cmd = cmd, writes = writes() }, { cmd = cmd, writes = {} })
     eq(child.lua_get('vim.uv.fs_stat(...) == nil', { file }), true)
