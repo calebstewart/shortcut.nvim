@@ -25,6 +25,11 @@
 --- ## Comments
 --- **@someone** · 2026-10-01 14:03
 --- > Comment body…
+---
+--- **@someone-else** · 2026-10-02 09:12
+--- > Attachment: [screenshot.png](https://…) · image/png · 1.2 MB
+--- >
+--- > File description…
 --- ```
 ---
 --- `render()` is pure (no buffer or editor state), so pickers can use it for previews. The
@@ -39,7 +44,13 @@
 ---     `tasks`, `comments`, `updated_at`. There is no epic name: it comes from `GET /epics/{id}`.
 ---   - `Task`: `id`, `description`, `complete`, `position`, `owner_ids`.
 ---   - `StoryComment`: `id`, `author_id` (nullable), `created_at`, `deleted`, `parent_id`
----     (nullable; the comment it is threaded under), `text` (nullable once deleted).
+---     (nullable; the comment it is threaded under), `text` (nullable once deleted). It has
+---     no reference to files: a file uploaded on its own, which the web app shows in the comment
+---     stream, is only in `Story.files`.
+---   - `UploadedFile` (`Story.files`): `id`, `name` (user-specified), `filename` (assigned on
+---     upload), `content_type`, `size` (bytes), `url` and `thumbnail_url` (both nullable),
+---     `uploader_id`, `created_at`, `description` (nullable). Files are shown with the comments,
+---     by `created_at`; their contents and thumbnails are never fetched. `Epic` has no `files`.
 local frontmatter = require('shortcut.buffer.frontmatter')
 
 local M = {}
@@ -100,6 +111,7 @@ M.REF_KINDS = { 'workflows', 'members', 'labels', 'iterations' }
 ---@field comments_marker integer
 ---@field comments_section shortcut.story.Range From the comments marker to the last line.
 ---@field comments table<integer, integer> Comment ID -> line of its `**@author** · date` header.
+---@field files table<integer, integer> File ID -> line of its `**@uploader** · date` header.
 
 ---------------------------------------------------------------------------------------------------
 -- Time
@@ -131,6 +143,29 @@ local function one_line(s)
   return (s:gsub('\r\n?', '\n'):gsub('\n', ' '))
 end
 M.one_line = one_line
+
+--- Characters replaced in the read-only section: in comment and file headers, and in file
+--- names, types and descriptions (not in comment text): C0 controls but tab, DEL, C1 controls,
+--- and Unicode line/paragraph separators and bidirectional formatting characters (which could
+--- make a file name display as something else).
+local UNSAFE = {
+  '[%z\1-\8\11-\31\127]',
+  '\194[\128-\159]', -- U+0080-U+009F
+  '\216\156', -- U+061C
+  '\226\128[\142\143]', -- U+200E, U+200F
+  '\226\128[\168-\174]', -- U+2028-U+202E
+  '\226\129[\166-\169]', -- U+2066-U+2069
+}
+
+--- A server string with the characters of `UNSAFE` replaced by U+FFFD.
+---@param s string
+---@return string
+local function printable(s)
+  for _, pattern in ipairs(UNSAFE) do
+    s = s:gsub(pattern, '\239\191\189')
+  end
+  return s
+end
 
 --- A string of digits as an integer.
 ---@param s string
@@ -475,6 +510,89 @@ local function comment_tree(comments)
   return prune(roots)
 end
 
+--- A file size in bytes, human-readable (`512 B`, `1.5 KB`, `256 KB`, `12 MB`), with
+--- 1024-byte units. `nil` if `size` is not a non-negative number.
+---@param size any
+---@return string?
+function M.format_size(size)
+  if type(size) ~= 'number' or size ~= size or size < 0 or size == math.huge then
+    return nil
+  end
+  if size < 1024 then
+    return ('%d B'):format(math.floor(size))
+  end
+  local units = { 'KB', 'MB', 'GB', 'TB' }
+  local value, unit = size / 1024, 1
+  while unit < #units do
+    -- What `value` will be shown as: move up a unit if that is 1024 or more.
+    local shown = value < 9.95 and value or math.floor(value + 0.5)
+    if shown < 1024 then
+      break
+    end
+    value, unit = value / 1024, unit + 1
+  end
+  local text = value < 9.95 and ('%.1f'):format(value):gsub('%.0$', '')
+    or ('%d'):format(math.floor(value + 0.5))
+  return text .. ' ' .. units[unit]
+end
+
+--- Whether a file URL may be shown as a Markdown link: `https://` with a host and no userinfo
+--- (`user@`), and only
+--- printable ASCII characters that can't end the link or start another (no spaces, control
+--- characters, `(`, `)`, `<`, `>`, `\` or backquotes).
+---@param url any
+---@return boolean
+function M.safe_url(url)
+  return type(url) == 'string'
+    and url:match('^https://[^/?#]') ~= nil
+    -- No userinfo (`https://media.example.com@evil.example/`): the host is what it looks like.
+    and url:match('^https://[^/?#]*@') == nil
+    and url:match('^[!-~]+$') ~= nil
+    and url:find('[()<>\\`]') == nil
+end
+
+--- A server string (a file name or type, a header part) as Markdown text: on one line,
+--- printable, and with the characters that could make or break a link (`[`, `]`, `<`, `>`,
+--- backquotes and backslashes) backslash-escaped.
+---@param s string
+---@return string
+local function markdown_text(s)
+  return (printable(one_line(s)):gsub('[\\`%[%]<>]', '\\%0'))
+end
+
+--- The name a file is shown with: its user-specified `name`, else its `filename`, else its ID.
+---@param file table
+---@return string
+local function file_name(file)
+  for _, key in ipairs({ 'name', 'filename' }) do
+    local v = file[key]
+    if type(v) == 'string' and vim.trim(one_line(v)) ~= '' then
+      return vim.trim(one_line(v))
+    end
+  end
+  return 'file ' .. one_line(tostring(file.id))
+end
+
+--- The line describing a file, without the quote: `Attachment: [name](url) · type · size`. The
+--- name is a link only if the URL is safe (see `safe_url()`).
+---@param file table An `UploadedFile`.
+---@return string
+function M.file_line(file)
+  local name = markdown_text(file_name(file))
+  local parts = {
+    'Attachment: ' .. (M.safe_url(file.url) and ('[%s](%s)'):format(name, file.url) or name),
+  }
+  if type(file.content_type) == 'string' then
+    -- Free-form, set by the uploader: escaped like the name, so it can't add links.
+    local content_type = vim.trim(markdown_text(file.content_type))
+    if content_type ~= '' then
+      table.insert(parts, content_type)
+    end
+  end
+  table.insert(parts, M.format_size(file.size))
+  return table.concat(parts, M.SEPARATOR)
+end
+
 --- Render a story.
 ---
 --- `lines` is the buffer content; `meta` says where things are (see `shortcut.story.Meta`).
@@ -492,7 +610,7 @@ function M.render(story, refs, opts)
 
   local lines = frontmatter.serialize(M.header(story, refs), M.FIELDS)
   -- The other fields are set as the lines are added.
-  local meta = { header = { first = 1, last = #lines }, tasks = {}, comments = {} } ---@type table
+  local meta = { header = { first = 1, last = #lines }, tasks = {}, comments = {}, files = {} } ---@type table
 
   local function add(line)
     table.insert(lines, line)
@@ -533,6 +651,20 @@ function M.render(story, refs, opts)
   meta.comments_marker = add(M.COMMENTS_MARKER)
   add('## Comments')
 
+  --- The `**@author** · date` header of a comment or file. Both parts are escaped like file
+  --- names (see `markdown_text()`): a mention or an unparsable date shown as it is can't add
+  --- links or display as something else.
+  ---@param author any
+  ---@param created_at any
+  ---@return string
+  local function entry_header(author, created_at)
+    return ('**@%s**%s%s'):format(
+      markdown_text(present(author) and mention(refs, author) or 'unknown'),
+      M.SEPARATOR,
+      markdown_text(M.format_time(created_at))
+    )
+  end
+
   ---@param node { comment: table, replies: table[] }
   ---@param prefix string Blockquote prefix of the comment's header line.
   local function render_comment(node, prefix)
@@ -541,11 +673,7 @@ function M.render(story, refs, opts)
     if c.deleted == true then
       header = '*(deleted comment)*'
     else
-      header = ('**@%s**%s%s'):format(
-        present(c.author_id) and mention(refs, c.author_id) or 'unknown',
-        M.SEPARATOR,
-        M.format_time(c.created_at)
-      )
+      header = entry_header(c.author_id, c.created_at)
     end
     meta.comments[c.id] = add((prefix .. header):gsub('%s+$', ''))
     local body = prefix .. '> '
@@ -564,11 +692,59 @@ function M.render(story, refs, opts)
     end
   end
 
-  for i, node in ipairs(comment_tree(story.comments)) do
+  ---@param file table
+  local function render_file(file)
+    meta.files[file.id] = add(entry_header(file.uploader_id, file.created_at))
+    add(('> ' .. M.file_line(file)):gsub('%s+$', ''))
+    local description = text_lines(file.description)
+    while #description > 0 and description[#description]:match('^%s*$') do
+      table.remove(description)
+    end
+    while #description > 0 and description[1]:match('^%s*$') do
+      table.remove(description, 1)
+    end
+    if #description > 0 then
+      add('>')
+      for _, l in ipairs(description) do
+        add(('> ' .. printable(l)):gsub('%s+$', ''))
+      end
+    end
+  end
+
+  -- Top-level comments and files, by time: at the same time, comments first, then by ID.
+  local entries = {} ---@type { time: integer, kind: integer, id: number, node?: table, file?: table }[]
+  for _, node in ipairs(comment_tree(story.comments)) do
+    local c = node.comment
+    table.insert(
+      entries,
+      { time = comment_time(c), kind = 0, id = tonumber(c.id) or 0, node = node }
+    )
+  end
+  for _, f in ipairs(list_of(story.files)) do
+    if type(f) == 'table' and present(f.id) then
+      table.insert(
+        entries,
+        { time = comment_time(f), kind = 1, id = tonumber(f.id) or 0, file = f }
+      )
+    end
+  end
+  table.sort(entries, function(a, b)
+    if a.time ~= b.time then
+      return a.time < b.time
+    elseif a.kind ~= b.kind then
+      return a.kind < b.kind
+    end
+    return a.id < b.id
+  end)
+  for i, entry in ipairs(entries) do
     if i > 1 then
       add('')
     end
-    render_comment(node, '')
+    if entry.node then
+      render_comment(entry.node, '')
+    else
+      render_file(entry.file)
+    end
   end
   meta.comments_section = { first = meta.comments_marker, last = #lines }
   return lines, meta --[[@as shortcut.story.Meta]]

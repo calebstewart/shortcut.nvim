@@ -37,7 +37,8 @@
 ---     `EpicState` of the workspace's single epic workflow, `GET /epic-workflow`), `owner_ids`
 ---     (member UUIDs), `group_ids` (team UUIDs), `label_ids` and `labels` (`LabelSlim`, with
 ---     `name`), `planned_start_date` and `deadline` (nullable `date-time` strings), `stats`
----     (`EpicStats`), `updated_at`.
+---     (`EpicStats`), `updated_at`. It has no `files` (unlike `Story`), so epic buffers show no
+---     attachments.
 ---   - `GET /epics/{id}/stories` returns every story of the epic at once (no paging), as
 ---     `StorySlim[]`: `id`, `name`, `story_type`, `workflow_id`, `workflow_state_id`, `position`,
 ---     `owner_ids`, `estimate` (nullable), `archived`. Stories may come from several workflows.

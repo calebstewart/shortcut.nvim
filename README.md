@@ -324,6 +324,11 @@ Description…
 >
 > **@someone-else** · 2026-10-01 15:20
 > > A reply…
+
+**@someone-else** · 2026-10-02 09:12
+> Attachment: [screenshot.png](https://…) · image/png · 1.2 MB
+>
+> File description…
 ```
 
 - **Header**, in this order: `id`; `type` (`feature`, `bug` or `chore`); `state` (the workflow
@@ -346,6 +351,17 @@ Description…
 - **Comments** are read-only: oldest first, each with its author and local time, the body
   quoted; replies are nested one quote level deeper under the comment they answer. Deleted
   comments are left out (a deleted comment with replies shows as `*(deleted comment)*`).
+- **Files** uploaded to the story are shown among the comments, by upload time (as in the web
+  app, where a file uploaded on its own looks like a comment; the API only lists it in the
+  story's `files`). Each shows who uploaded it and when, then `Attachment:` with the file's
+  name, its content type and size, and its description (if any) quoted below. The name links
+  to the file only if its URL is `https://` with a host and no `user@` part, without spaces,
+  control characters or characters that would break the link; otherwise it is plain text.
+  Names, types and the author and date of comment and file headers are escaped, so they can't
+  add links or images of their own. In those, and in file descriptions, control characters
+  (except tabs), line separators and bidirectional-formatting characters are shown as `�`
+  (comment text is shown as written). Files and thumbnails are never downloaded, in buffers or
+  in picker previews: only the link is shown. Like comments, file entries are read-only.
 - The `<!-- shortcut:… -->` lines mark where the sections start, so a description containing
   its own `## Tasks` heading is not confused with the tasks. Leave them in place. If a
   description itself contains such a line, the **last** comments marker and the last tasks
@@ -545,6 +561,7 @@ Description…
   from a Markdown plugin, or global), else Neovim's own `<CR>`. **`gf`** on `sc-<id>` works
   too, as everywhere.
 - Modelines are disabled, as in story buffers.
+- Epics have no file attachments to show: the API's `Epic` has no `files` (only stories do).
 - `:e!` fetches the epic and its stories again. Editing (`:w`) is not available: it reports
   so and keeps your changes in the buffer.
 
