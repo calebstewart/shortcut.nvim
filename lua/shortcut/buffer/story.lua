@@ -127,6 +127,7 @@ local function one_line(s)
   end
   return (s:gsub('\r\n?', '\n'):gsub('\n', ' '))
 end
+M.one_line = one_line
 
 --- A string of digits as an integer.
 ---@param s string
@@ -217,6 +218,7 @@ local function text_lines(s)
   s = s:gsub('\r\n?', '\n')
   return vim.split(s, '\n', { plain = true })
 end
+M.text_lines = text_lines
 
 --- The header fields of a story.
 ---@param story table
