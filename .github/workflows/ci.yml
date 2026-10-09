@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: stylua
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: JohnnyMorganz/stylua-action@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: 2.5.2
+          args: --check .
+
+  test:
+    name: test (${{ matrix.os }}, nvim ${{ matrix.nvim }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        nvim: [stable, nightly]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.nvim }}
+      - name: Run tests
+        run: make test

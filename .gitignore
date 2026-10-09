@@ -1,0 +1,4 @@
+/deps/
+/result
+/result-*
+/.direnv/
