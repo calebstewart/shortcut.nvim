@@ -66,7 +66,34 @@ require('shortcut').setup({
 
 ## Authentication
 
-_Coming soon._
+shortcut.nvim needs a Shortcut API token (create one under
+[Settings → API Tokens](https://app.shortcut.com/settings/account/api-tokens)). It looks in these
+places, in order, and uses the first token it finds:
+
+1. **`token` in `setup()`**: a string, or a function returning one. A function is called once
+   per Neovim session, so it can fetch the token from a password manager:
+
+   ```lua
+   require('shortcut').setup({
+     token = function()
+       return vim.trim(vim.fn.system({ 'pass', 'show', 'shortcut/api-token' }))
+     end,
+   })
+   ```
+
+2. **The `SHORTCUT_API_TOKEN` environment variable** (or the older `CLUBHOUSE_API_TOKEN`).
+3. **The [`short` CLI](https://github.com/shortcut-cli/shortcut-cli)'s config file.** If you
+   have run `short install`, there is nothing else to do. The file is found exactly where
+   `short` looks for it: `~/.config/shortcut-cli/config.json` by default, or
+   `$XDG_CONFIG_HOME/shortcut-cli/config.json` when `XDG_CONFIG_HOME` is set. (Like `short`,
+   when `XDG_CONFIG_HOME` is unset but `XDG_DATA_HOME` is set, it uses
+   `$XDG_DATA_HOME/.config/shortcut-cli/config.json`.) Set `cli_config_path` to use a different
+   file; `require('shortcut.auth').cli_config_path()` shows the path in use.
+
+Your mention name and workspace URL slug are read from the `short` config file when its token
+is the one in use.
+
+shortcut.nvim never shows the token in messages; at most it shows the last four characters.
 
 ## Commands
 
