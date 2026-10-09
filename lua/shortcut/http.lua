@@ -191,6 +191,8 @@ function M._curl_command(req, marker)
     req.method,
     '--write-out',
     '\n' .. marker .. '%{http_code} %header{retry-after}',
+    -- Never expand `{a,b}` or `[1-3]` in the URL into several requests.
+    '--globoff',
     '--url',
     req.url,
   }
@@ -236,10 +238,17 @@ end
 ---@param code integer
 ---@return string
 local function curl_error(stderr, code)
-  local msg = vim.trim(stderr or '')
-  -- curl: (6) Could not resolve host: ...  ->  keep the last line, without the prefix.
-  local lines = vim.split(msg, '\n', { trimempty = true })
-  msg = (lines[#lines] or ''):gsub('^curl: ', '')
+  -- curl: (6) Could not resolve host: ...  ->  keep the last meaningful line, without the
+  -- prefix. Option errors end with a "curl: try 'curl --help' ..." hint: skip it.
+  local msg = ''
+  local lines = vim.split(vim.trim(stderr or ''), '\n', { trimempty = true })
+  for i = #lines, 1, -1 do
+    local line = vim.trim(lines[i])
+    if not line:find('^curl: try ') then
+      msg = line:gsub('^curl: ', '')
+      break
+    end
+  end
   if msg == '' then
     msg = ('curl exited with code %d'):format(code)
   end
@@ -387,7 +396,13 @@ end
 ---@return shortcut.http.Handle
 function M.request(req, callback)
   vim.validate('req', req, 'table')
-  vim.validate('req.path', req.path, 'string')
+  vim.validate('req.path', req.path, function(p)
+    return type(p) == 'string' and p:sub(1, 1) == '/'
+  end, 'string starting with /')
+  vim.validate('req.body', req.body, function(b)
+    -- curl's config reader stops at NUL; JSON-encoded tables never contain a raw one.
+    return b == nil or type(b) == 'table' or (type(b) == 'string' and not b:find('\0', 1, true))
+  end, 'table, or string without NUL bytes')
   vim.validate('callback', callback, 'function')
   local method = (req.method or 'GET'):upper()
   local path = req.path
@@ -582,14 +597,23 @@ function M.parse_identity(data)
   }
 end
 
+--- How long a failed `whoami` (other than a rejected token) is remembered, in milliseconds.
+M.WHOAMI_ERROR_TTL = 60 * 1000
+
+---@class shortcut.http.WhoamiEntry
+---@field identity? shortcut.http.Identity
+---@field err? shortcut.http.Error
+---@field expires? integer `vim.uv.now()` after which a failure is retried; `nil`: never.
+
 --- `whoami` results per token, and callbacks waiting for a request in flight.
----@type table<string, shortcut.http.Identity>
+---@type table<string, shortcut.http.WhoamiEntry>
 local whoami_cache = {}
 ---@type table<string, fun(err?: shortcut.http.Error, identity?: shortcut.http.Identity)[]>
 local whoami_waiting = {}
 
---- The member the token belongs to (`GET /member`), cached for the session. `callback` runs on
---- the main loop.
+--- The member the token belongs to (`GET /member`), cached for the session. A rejected token
+--- (401) is remembered for the session too, other failures for `WHOAMI_ERROR_TTL`, so opening
+--- links does not keep asking. `callback` runs on the main loop.
 ---@param callback fun(err?: shortcut.http.Error, identity?: shortcut.http.Identity)
 function M.whoami(callback)
   local resolved, auth_err = auth.resolve()
@@ -605,10 +629,13 @@ function M.whoami(callback)
     return
   end
   local token = resolved.token
-  local cached = whoami_cache[token]
+  local cached = whoami_cache[token] ---@type shortcut.http.WhoamiEntry?
+  if cached and cached.expires and vim.uv.now() >= cached.expires then
+    whoami_cache[token], cached = nil, nil
+  end
   if cached then
     vim.schedule(function()
-      callback(nil, vim.deepcopy(cached))
+      callback(vim.deepcopy(cached.err), vim.deepcopy(cached.identity))
     end)
     return
   end
@@ -621,16 +648,25 @@ function M.whoami(callback)
     local identity, parse_err = nil, nil
     if not err then
       identity, parse_err = M.parse_identity(data)
-      if identity then
-        whoami_cache[token] = identity
-      else
+      if not identity then
         err = { kind = 'decode', message = parse_err, method = 'GET', path = '/member' }
       end
     end
+    if identity then
+      whoami_cache[token] = { identity = identity }
+    elseif err and err.status == 401 then
+      whoami_cache[token] = { err = err }
+    elseif err then
+      whoami_cache[token] = { err = err, expires = vim.uv.now() + M.WHOAMI_ERROR_TTL }
+    end
     local waiting = whoami_waiting[token] or {}
     whoami_waiting[token] = nil
+    -- One failing callback must not keep the others from being called.
     for _, cb in ipairs(waiting) do
-      cb(err, identity and vim.deepcopy(identity))
+      local ok, cb_err = pcall(cb, vim.deepcopy(err), identity and vim.deepcopy(identity))
+      if not ok then
+        require('shortcut.notify').error(vim.split(tostring(cb_err), '\n', { plain = true })[1])
+      end
     end
   end)
 end

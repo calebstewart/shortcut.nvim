@@ -165,6 +165,26 @@ T['request()']['uses an explicit token instead of the resolved one'] = function(
   eq(contains(requests()[1].headers, 'Shortcut-Token: other-token-aaaa-bbbb-cccc'), true)
 end
 
+T['request()']['rejects a path without a leading slash'] = function()
+  expect.error(function()
+    child.lua([[_G.http.request({ path = 'member' }, function() end)]])
+  end, 'string starting with /')
+end
+
+T['request()']['rejects a string body containing NUL'] = function()
+  -- curl's config reader would silently truncate it.
+  expect.error(function()
+    child.lua(
+      [[_G.http.request({ method = 'POST', path = '/x', body = 'before\0after' }, function() end)]]
+    )
+  end, 'without NUL bytes')
+  eq(#requests(), 0)
+  -- A table is JSON-encoded, which escapes NUL.
+  respond({ { status = 200, body = '{}' } })
+  request({ method = 'POST', path = '/x', body = { s = 'a\0b' } })
+  eq(requests()[1].body, '{"s":"a\\u0000b"}')
+end
+
 T['request()']['rejects a token with control characters'] = function()
   local r = request({ path = '/member', token = 'abc\r\nX-Evil: 1' })
   eq(r.err.kind, 'auth')
@@ -364,6 +384,7 @@ T['curl']['never puts the token or the body on the command line'] = function()
   end
   eq(call.cmd[1], 'curl')
   eq(call.cmd[2], '-q') -- ignore ~/.curlrc
+  eq(vim.tbl_contains(call.cmd, '--globoff'), true) -- no {a,b} / [1-3] URL expansion
   local cmdline = table.concat(call.cmd, ' ')
   eq(cmdline:find('--config -', 1, true) ~= nil, true)
   eq(cmdline:find('--max-time 30', 1, true) ~= nil, true)
@@ -431,6 +452,15 @@ T['curl']['kills curl on cancel'] = function()
   eq(child.lua_get('_G.killed'), true)
 end
 
+T['curl']['skips the "try curl --help" hint in errors'] = function()
+  child.lua(
+    [[_G.result = { code = 26, stdout = '', stderr =
+    "curl: option --config: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\n" }]]
+  )
+  local r = request({ path = '/member', retry = false })
+  eq(r.err.message, 'option --config: error encountered when reading a file')
+end
+
 T['curl']['reports a missing curl'] = function()
   child.lua([[vim.system = function() error('ENOENT: no such file or directory') end]])
   local r = request({ path = '/member', retry = false })
@@ -480,17 +510,53 @@ T['whoami()']['is cached for the session, per token'] = function()
   eq(#requests(), 2)
 end
 
-T['whoami()']['does not cache errors'] = function()
+T['whoami()']['remembers other failures briefly'] = function()
   respond({ { status = 500 }, { status = 200, fixture = 'member' } })
   child.lua([[
     _G.outs = {}
-    local function call() _G.http.whoami(function(err, id) table.insert(_G.outs, err and err.status or id.url_slug) end) end
+    _G.call = function()
+      local n = #_G.outs
+      _G.http.whoami(function(err, id) table.insert(_G.outs, err and err.status or id.url_slug) end)
+      vim.wait(1000, function() return #_G.outs > n end)
+    end
     call()
-    vim.wait(1000, function() return #_G.outs == 1 end)
-    call()
-    vim.wait(1000, function() return #_G.outs == 2 end)
+    call() -- within the TTL: no new request
   ]])
-  eq(child.lua_get('_G.outs'), { 500, 'acme' })
+  eq(child.lua_get('_G.outs'), { 500, 500 })
+  eq(#requests(), 1)
+  child.lua([[_G.http.WHOAMI_ERROR_TTL = 0; _G.http._clear_cache(); _G.responses = {
+    { status = 500 }, { status = 200, fixture = 'member' } }; _G.requests = {}]])
+  child.lua([[call(); vim.wait(5); call()]])
+  eq(child.lua_get('_G.outs'), { 500, 500, 500, 'acme' })
+  eq(#requests(), 2)
+end
+
+T['whoami()']['remembers a rejected token for the session'] = function()
+  child.lua([[
+    _G.http.WHOAMI_ERROR_TTL = 0
+    _G.routes = function() return { status = 401 } end
+    _G.outs = {}
+    for i = 1, 3 do
+      _G.http.whoami(function(err) table.insert(_G.outs, err.status) end)
+      vim.wait(1000, function() return #_G.outs == i end)
+    end
+  ]])
+  eq(child.lua_get('_G.outs'), { 401, 401, 401 })
+  eq(#requests(), 1)
+end
+
+T['whoami()']['calls every waiter even if one fails'] = function()
+  respond({ { status = 200, fixture = 'member' } })
+  child.lua([[
+    _G.outs = {}
+    _G.http.whoami(function() error('first waiter broke') end)
+    _G.http.whoami(function(_, id) table.insert(_G.outs, id.mention_name) end)
+    vim.wait(1000, function() return #_G.outs == 1 end)
+  ]])
+  eq(child.lua_get('_G.outs'), { 'jdoe' })
+  local msgs = child.lua_get('_G.messages')
+  eq(#msgs, 1)
+  eq(msgs[1].msg:find('first waiter broke', 1, true) ~= nil, true)
 end
 
 T['whoami()']['rejects a response without the expected fields'] = function()
