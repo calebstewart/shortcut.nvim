@@ -7,8 +7,11 @@
 ---   - on disk, in `stdpath('cache')/shortcut/<url_slug>/refs.json` (directory 0700, file
 ---     0600: it holds member names), written atomically. An unreadable or corrupt file is a
 ---     miss. The token is never stored.
---- An entry expires `config.cache.ttl` seconds after it was fetched. Callers asking for a list
---- while it is being fetched wait for that fetch. If a refetch fails, the expired copy is used.
+--- An entry expires `config.cache.ttl` seconds after it was fetched. An expired list is still
+--- answered at once (flagged `stale`) while it is refetched in the background, so being offline
+--- never makes callers wait. Without any copy, callers wait for the fetch; callers asking while
+--- a fetch is running share it. After a failed fetch, the list is not fetched again for
+--- `RETRY_FAILED_AFTER` seconds: callers get the expired copy, or the error, immediately.
 ---
 --- The workspace is the token's (`http.user()`), so switching tokens never mixes lists.
 ---
@@ -27,6 +30,9 @@ M.VERSION = 1
 
 M.KINDS = refs.KINDS
 
+--- Seconds during which a failed fetch is not retried.
+M.RETRY_FAILED_AFTER = 60
+
 ---@class shortcut.cache.Entry
 ---@field fetched_at integer `os.time()` when fetched.
 ---@field data any
@@ -37,9 +43,11 @@ M.KINDS = refs.KINDS
 ---@field url_slug string
 ---@field lists table<shortcut.refs.Kind, shortcut.cache.Entry>
 
+--- Set when `data` is an expired copy.
 ---@class shortcut.cache.Info
----@field stale? boolean `true` if `data` expired and could not be refreshed.
----@field err? shortcut.http.Error Why it could not be refreshed.
+---@field stale true
+---@field refreshing boolean A refetch is in progress.
+---@field err? shortcut.http.Error Why the last refetch failed, if it did (recently).
 
 ---@alias shortcut.cache.Callback fun(err?: shortcut.http.Error, data?: any, info?: shortcut.cache.Info)
 
@@ -59,6 +67,10 @@ local memory = {}
 --- Fetches in progress, by `<slug>/<kind>`.
 ---@type table<string, shortcut.cache.Flight>
 local inflight = {}
+
+--- Recently failed fetches, by `<slug>/<kind>`.
+---@type table<string, { err: shortcut.http.Error, at: integer }>
+local failures = {}
 
 --- Bumped by `clear()`: fetches started before are not stored.
 local generation = 0
@@ -205,6 +217,67 @@ local function remember(slug, kind, entry)
   memory[slug][kind] = entry
 end
 
+--- The error of a fetch that failed less than `RETRY_FAILED_AFTER` seconds ago.
+---@param key string
+---@return shortcut.http.Error?
+local function recent_failure(key)
+  local failure = failures[key]
+  if not failure then
+    return nil
+  end
+  local age = M._now() - failure.at
+  if age >= 0 and age < M.RETRY_FAILED_AFTER then
+    return failure.err
+  end
+  failures[key] = nil
+  return nil
+end
+
+--- Start fetching a list. Its waiters get the result; the cache is only updated if `clear()` was
+--- not called meanwhile.
+---@param slug string
+---@param kind shortcut.refs.Kind
+---@param key string
+---@return shortcut.cache.Flight
+local function start_fetch(slug, kind, key)
+  ---@type shortcut.cache.Flight
+  local flight = { waiters = {}, generation = generation }
+  inflight[key] = flight
+  flight.handle = refs.fetch(kind, function(err, data)
+    if inflight[key] == flight then
+      inflight[key] = nil
+    end
+    local current_generation = flight.generation == generation
+    local slim
+    if not err then
+      local slim_err
+      slim, slim_err = refs.slim(kind, data)
+      if not slim then
+        err = { kind = 'decode', message = slim_err, method = 'GET', path = refs.path(kind) }
+      end
+    end
+    if err then
+      if current_generation then
+        failures[key] = { err = err, at = M._now() }
+      end
+      for _, w in ipairs(flight.waiters) do
+        deliver(w, err)
+      end
+      return
+    end
+    if current_generation then
+      failures[key] = nil
+      local entry = { fetched_at = M._now(), data = slim }
+      remember(slug, kind, entry)
+      write_disk(slug, kind, entry)
+    end
+    for _, w in ipairs(flight.waiters) do
+      deliver(w, nil, slim)
+    end
+  end)
+  return flight
+end
+
 ---@param slug string
 ---@param kind shortcut.refs.Kind
 ---@param waiter shortcut.cache.Waiter
@@ -215,60 +288,39 @@ local function get_in(slug, kind, waiter)
   end
   local key = slug .. '/' .. kind
   local flight = inflight[key]
-  if flight then
-    table.insert(flight.waiters, waiter)
-    return
-  end
-  local file = read_disk(slug)
-  local disk = file and file.lists[kind]
-  if fresh(disk) then
-    ---@cast disk shortcut.cache.Entry
-    remember(slug, kind, disk)
-    return deliver(waiter, nil, disk.data)
-  end
-  -- The newest expired copy, in case the fetch fails.
+  -- The newest expired copy.
   local stale = mem
-  if disk and (not stale or disk.fetched_at > stale.fetched_at) then
-    stale = disk
+  if not flight then
+    local file = read_disk(slug)
+    local disk = file and file.lists[kind]
+    if fresh(disk) then
+      ---@cast disk shortcut.cache.Entry
+      remember(slug, kind, disk)
+      return deliver(waiter, nil, disk.data)
+    end
+    if disk and (not stale or disk.fetched_at > stale.fetched_at) then
+      stale = disk
+    end
   end
-
-  ---@type shortcut.cache.Flight
-  local new_flight = { waiters = { waiter }, generation = generation }
-  inflight[key] = new_flight
-  new_flight.handle = refs.fetch(kind, function(err, data)
-    if inflight[key] == new_flight then
-      inflight[key] = nil
+  local failed = recent_failure(key)
+  if stale then
+    -- Answer now; refresh in the background.
+    if not flight and not failed then
+      flight = start_fetch(slug, kind, key)
     end
-    local current_generation = new_flight.generation == generation
-    local slim
-    if not err then
-      local slim_err
-      slim, slim_err = refs.slim(kind, data)
-      if not slim then
-        err = { kind = 'decode', message = slim_err, method = 'GET', path = refs.path(kind) }
-      end
-    end
-    local info ---@type shortcut.cache.Info?
-    if err then
-      if not stale then
-        for _, w in ipairs(new_flight.waiters) do
-          deliver(w, err)
-        end
-        return
-      end
-      slim, info = stale.data, { stale = true, err = err }
-      if current_generation then
-        remember(slug, kind, stale)
-      end
-    elseif current_generation then
-      local entry = { fetched_at = M._now(), data = slim }
-      remember(slug, kind, entry)
-      write_disk(slug, kind, entry)
-    end
-    for _, w in ipairs(new_flight.waiters) do
-      deliver(w, nil, slim, info)
-    end
-  end)
+    remember(slug, kind, stale)
+    return deliver(
+      waiter,
+      nil,
+      stale.data,
+      { stale = true, refreshing = flight ~= nil, err = failed }
+    )
+  end
+  if failed then
+    return deliver(waiter, failed)
+  end
+  flight = flight or start_fetch(slug, kind, key)
+  table.insert(flight.waiters, waiter)
 end
 
 ---@class shortcut.cache.Handle
@@ -277,7 +329,8 @@ end
 --- A lookup list of the token's workspace: from memory, else from disk, else fetched.
 --- `callback(err, data, info)` runs on the main loop. `data` is a list of `shortcut.refs.*`
 --- records (for `epic_workflow`, a `shortcut.refs.EpicWorkflow`); do not modify it. If the list
---- expired and refetching it failed, `data` is the expired copy and `info.stale` is set.
+--- expired, `data` is the expired copy and `info` says so (and why the last refetch failed, if
+--- it did). `err` is set only when there is no copy at all.
 ---
 --- Cancelling the returned handle only drops this callback: a fetch it started continues for the
 --- other callers and the cache.
@@ -308,9 +361,10 @@ function M.get(kind, callback)
 end
 
 --- Load several lists (default: all of them) in parallel, for the synchronous lookups.
---- `callback(err)` runs once all are loaded, or with the first error.
+--- `callback(err, stale)` runs once all are loaded, or with the first error. `stale` lists the
+--- kinds answered with an expired copy (see `get()`), or is `nil` if every list is fresh.
 ---@param kinds? shortcut.refs.Kind[]
----@param callback fun(err?: shortcut.http.Error)
+---@param callback fun(err?: shortcut.http.Error, stale?: table<shortcut.refs.Kind, shortcut.cache.Info>)
 ---@return shortcut.cache.Handle
 function M.load(kinds, callback)
   vim.validate('kinds', kinds, 'table', true)
@@ -318,6 +372,8 @@ function M.load(kinds, callback)
   kinds = kinds or M.KINDS
   local handles = {} ---@type shortcut.cache.Handle[]
   local remaining, finished = #kinds, false
+  local stale = nil ---@type table<shortcut.refs.Kind, shortcut.cache.Info>?
+  ---@param err? shortcut.http.Error
   local function finish(err)
     if finished then
       return
@@ -326,7 +382,7 @@ function M.load(kinds, callback)
     for _, h in ipairs(handles) do
       h:cancel()
     end
-    callback(err)
+    callback(err, not err and stale or nil)
   end
   if remaining == 0 then
     vim.schedule(function()
@@ -338,9 +394,13 @@ function M.load(kinds, callback)
   for _, kind in ipairs(kinds) do
     table.insert(
       handles,
-      M.get(kind, function(err)
+      M.get(kind, function(err, _, info)
         if err then
           return finish(err)
+        end
+        if info then
+          stale = stale or {}
+          stale[kind] = info
         end
         remaining = remaining - 1
         if remaining == 0 then
@@ -359,17 +419,23 @@ function M.load(kinds, callback)
   }
 end
 
---- Forget every list, in memory and on disk, for every workspace. Fetches in progress still
---- answer their callers, but are not stored.
+--- Forget every list, in memory and on disk, for every workspace, and any failed fetch. Fetches
+--- in progress still answer the callers waiting for them, but are not stored.
 function M.clear()
   memory = {}
   inflight = {}
+  failures = {}
   generation = generation + 1
   local root = M.root()
   for name, ftype in vim.fs.dir(root) do
     if ftype == 'directory' then
       local dir = vim.fs.joinpath(root, name)
-      vim.uv.fs_unlink(vim.fs.joinpath(dir, 'refs.json'))
+      for file in vim.fs.dir(dir) do
+        -- The cache file, and temporary files left by an interrupted write.
+        if file == 'refs.json' or file:match('^%.refs%.json%..*%.tmp$') then
+          vim.uv.fs_unlink(vim.fs.joinpath(dir, file))
+        end
+      end
       -- Only if nothing else is in it.
       vim.uv.fs_rmdir(dir)
     end
@@ -763,6 +829,7 @@ end
 function M._reset()
   memory = {}
   inflight = {}
+  failures = {}
   current = nil
   warned = {}
   generation = generation + 1

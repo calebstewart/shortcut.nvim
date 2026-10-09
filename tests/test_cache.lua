@@ -57,7 +57,7 @@ local T = new_set({
 
         function _G.load(kinds)
           local r
-          cache.load(kinds, function(err) r = { err = err } end)
+          cache.load(kinds, function(err, stale) r = { err = err, stale = stale } end)
           vim.wait(2000, function() return r ~= nil end, 2)
           return r
         end
@@ -138,37 +138,78 @@ T['get()']['falls back to disk in a new session'] = function()
   eq(count('/labels'), 1)
 end
 
-T['get()']['refetches after the TTL, in memory and on disk'] = function()
+--- Wait until `path` has been requested `n` times.
+local function wait_count(path, n)
+  child.lua(
+    [[local path, n = ...; vim.wait(2000, function() return (_G.counts[path] or 0) >= n end, 1)]],
+    { path, n }
+  )
+  eq(count(path), n)
+end
+
+--- Let background fetches finish.
+local function settle()
+  child.lua('vim.wait(30)')
+end
+
+T['get()']['answers an expired list at once and refreshes it in the background'] = function()
   get('labels')
   child.lua('_G.now = _G.now + 24 * 60 * 60 - 1')
-  get('labels')
+  eq(get('labels').info, nil)
   eq(count('/labels'), 1)
+
   child.lua('_G.now = _G.now + 1')
-  get('labels')
+  local r = get('labels')
+  eq(names(r.data), { 'bug', 'Frontend', 'old-label' })
+  eq(r.info, { stale = true, refreshing = true })
+  wait_count('/labels', 2)
+  settle()
+  eq(get('labels').info, nil)
   eq(count('/labels'), 2)
 
   -- The disk copy was refreshed too.
   child.lua('_G.new_session(); _G.now = _G.now + 10')
-  get('labels')
+  eq(get('labels').info, nil)
   eq(count('/labels'), 2)
   child.lua('_G.new_session(); _G.now = _G.now + 24 * 60 * 60')
+  eq(get('labels').info.stale, true)
+  wait_count('/labels', 3)
+end
+
+T['get()']['never waits for a refetch when it has a copy'] = function()
   get('labels')
-  eq(count('/labels'), 3)
+  -- A transport that never answers, like a network that hangs.
+  child.lua([[
+    require('shortcut.http')._set_transport(function(req)
+      _G.counts.hung = (_G.counts.hung or 0) + 1
+      return { cancel = function() end }
+    end)
+    _G.now = _G.now + 2 * 24 * 60 * 60
+  ]])
+  local start = vim.uv.hrtime()
+  local r = get('labels')
+  eq(r.info, { stale = true, refreshing = true })
+  r = get('labels')
+  eq(r.info, { stale = true, refreshing = true })
+  eq(#r.data, 3)
+  -- One background refetch, shared.
+  eq(count('hung'), 1)
+  eq((vim.uv.hrtime() - start) / 1e6 < 1000, true)
 end
 
 T['get()']['uses config.cache.ttl'] = function()
   child.lua([[require('shortcut').setup({ cache = { ttl = 60 } })]])
   get('labels')
   child.lua('_G.now = _G.now + 60')
-  get('labels')
-  eq(count('/labels'), 2)
+  eq(get('labels').info.stale, true)
+  wait_count('/labels', 2)
 end
 
 T['get()']['an entry from the future counts as expired'] = function()
   get('labels')
   child.lua('_G.now = _G.now - 3600')
-  get('labels')
-  eq(count('/labels'), 2)
+  eq(get('labels').info.stale, true)
+  wait_count('/labels', 2)
 end
 
 T['get()']['concurrent callers share one fetch'] = function()
@@ -195,25 +236,38 @@ T['get()']['a cancelled caller is not called; the fetch still fills the cache'] 
   eq(count('/labels'), 1)
 end
 
-T['get()']['reports a failed fetch'] = function()
+T['get()']['reports a failed fetch, and does not retry it for a minute'] = function()
   child.lua([[_G.fail['/labels'] = 500]])
   local r = get('labels')
   eq(r.err.status, 500)
   eq(r.data, nil)
-  -- Not remembered.
-  child.lua([[_G.fail['/labels'] = nil]])
+  child.lua([[_G.fail['/labels'] = nil; _G.now = _G.now + 59]])
+  eq(get('labels').err.status, 500)
+  eq(count('/labels'), 1)
+  child.lua('_G.now = _G.now + 1')
   eq(get('labels').err, nil)
   eq(count('/labels'), 2)
 end
 
-T['get()']['uses the expired copy when refetching fails'] = function()
+T['get()']['reports why an expired copy could not be refreshed'] = function()
   get('labels')
-  child.lua([[_G.fail['/labels'] = 503; _G.now = _G.now + 2 * 24 * 60 * 60]])
+  child.lua([[_G.fail['/labels'] = 401; _G.now = _G.now + 2 * 24 * 60 * 60]])
+  eq(get('labels').info, { stale = true, refreshing = true })
+  wait_count('/labels', 2)
+  settle()
+
+  -- Answered at once, without asking again for a minute.
   local r = get('labels')
   eq(r.err, nil)
   eq(names(r.data), { 'bug', 'Frontend', 'old-label' })
   eq(r.info.stale, true)
-  eq(r.info.err.status, 503)
+  eq(r.info.refreshing, false)
+  eq(r.info.err.status, 401)
+  eq(count('/labels'), 2)
+
+  child.lua('_G.now = _G.now + 60')
+  eq(get('labels').info, { stale = true, refreshing = true })
+  wait_count('/labels', 3)
 
   -- Also from disk in a new session.
   child.lua('_G.new_session()')
@@ -335,6 +389,33 @@ T['clear()']['a fetch in progress is not stored'] = function()
   eq(count('/labels'), 2)
 end
 
+T['clear()']['an expired copy is not handed out after clear()'] = function()
+  get('labels')
+  child.lua([[
+    _G.fail['/labels'] = 503
+    _G.now = _G.now + 2 * 24 * 60 * 60
+    _G.first = nil
+    cache.get('labels', function(err, data, info) _G.first = { info = info } end)
+    vim.wait(2000, function() return _G.first ~= nil end, 1)
+    -- The background refetch is in flight.
+    cache.clear()
+  ]])
+  eq(child.lua_get('_G.first.info'), { stale = true, refreshing = true })
+  local r = get('labels')
+  eq(r.data, nil)
+  eq(r.err.status, 503)
+  settle()
+  eq(get('labels').err.status, 503)
+end
+
+T['clear()']['removes temporary files left by an interrupted write'] = function()
+  get('labels')
+  local path = cache_file('acme')
+  child.lua('vim.fn.writefile({}, vim.fs.dirname(...) .. "/.refs.json.123.456.tmp")', { path })
+  child.lua('cache.clear()')
+  eq(child.lua_get('vim.uv.fs_stat(vim.fs.dirname(...)) == nil', { path }), true)
+end
+
 T['clear()']['works without a cache directory'] = function()
   expect.no_error(function()
     child.lua('cache.clear()')
@@ -363,6 +444,23 @@ T['load()']['reports the first error'] = function()
   local r = child.lua_get([[_G.load({ 'labels', 'groups' })]])
   eq(r.err.status, 500)
   eq(r.err.path, '/groups')
+end
+
+T['load()']['reports expired lists'] = function()
+  child.lua('_G.load()')
+  child.lua([[_G.fail['/labels'] = 401; _G.now = _G.now + 2 * 24 * 60 * 60]])
+  local r = child.lua_get([[_G.load({ 'labels', 'members' })]])
+  eq(r.err, nil)
+  eq(r.stale, {
+    labels = { stale = true, refreshing = true },
+    members = { stale = true, refreshing = true },
+  })
+  wait_count('/labels', 2)
+  wait_count('/members', 2)
+  settle()
+  r = child.lua_get([[_G.load({ 'labels', 'members' })]])
+  eq(r.stale.labels.err.status, 401)
+  eq(r.stale.members, nil)
 end
 
 T['load()']['with no kinds still calls back'] = function()
