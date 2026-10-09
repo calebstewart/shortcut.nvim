@@ -72,6 +72,9 @@ function M.changes(buf, lookup)
   if not snap then
     return nil, { { line = 1, message = 'the story is not loaded; :e! to reload' } }
   end
+  if snap.stale then
+    return nil, { { line = 1, message = snap.stale } }
+  end
   local opts = { show_owners = snap.show_owners }
   -- Problems in the original render (e.g. a task without a description) are reported for the
   -- buffer, which has them too until they are fixed.
@@ -362,6 +365,17 @@ local function run(st)
 
   -- Reload.
   local ferr, fresh, epic = async.await(story.fetch, id)
+  if (ferr or not fresh) and current(st) then
+    -- The snapshot still shows the story from before this save: a later save compared with it
+    -- would send the same changes again (creating the new tasks twice). Refuse until `:e!`.
+    story.invalidate(
+      buf,
+      (
+        'sc-%d was saved, but could not be reloaded afterwards, so the buffer is out of date; '
+        .. ':e! reloads it (saving again now could send the same changes twice)'
+      ):format(id)
+    )
+  end
   if not vim.api.nvim_buf_is_loaded(buf) then
     if #failures > 0 then
       return ('some changes failed:\n- %s'):format(table.concat(failures, '\n- '))
@@ -376,7 +390,10 @@ local function run(st)
       table.concat(failures, '\n- ')
     )
     if ferr or not fresh then
-      return msg .. '\nThe buffer keeps your edits; :e! reloads the story (discarding them).'
+      return (
+        '%s\nReloading the story failed too (%s): :e! reloads it, discarding your edits. Saving '
+        .. 'is refused until then, as it could send what was saved again.'
+      ):format(msg, ferr)
     end
     if current(st) then
       local rebased = story.rebase(buf, fresh, story.cache_refs(epic), created)
@@ -388,10 +405,14 @@ local function run(st)
   end
 
   if ferr or not fresh then
+    -- 'modified' stays set: the buffer does not show what was loaded, and can't be saved.
     notify.warn(
-      ('sc-%d saved (%s), but reloading it failed: %s; :e! to reload'):format(id, summary, ferr)
+      (
+        'sc-%d saved (%s), but reloading it failed: %s. :e! reloads it; saving is refused until '
+        .. 'then, as it could send the same changes twice.'
+      ):format(id, summary, ferr)
     )
-    return nil
+    return nil, { keep_modified = true }
   end
   if not current(st) then
     notify.info(('sc-%d saved (%s)'):format(id, summary))
@@ -438,6 +459,9 @@ function M.save(buf, id, opts, done)
   local snap = story.snapshot(buf)
   if not snap then
     return done('the story is not loaded; :e! to reload')
+  end
+  if snap.stale then
+    return done(snap.stale)
   end
   saving[buf] = true
   local modifiable = vim.bo[buf].modifiable

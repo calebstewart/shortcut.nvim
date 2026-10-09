@@ -610,6 +610,8 @@ end
 ---@field refs shortcut.story.Refs What it was rendered with (`epic` included).
 ---@field show_owners boolean
 ---@field task_marks table<integer, integer> Extmark ID (namespace `shortcut.tasks`) -> task ID.
+---@field stale? string Set when the snapshot no longer matches the server in a way a save can't
+---  account for (see `invalidate()`): why saving is refused until the story is reloaded.
 
 ---@type table<integer, shortcut.story.Snapshot>
 local snapshots = {}
@@ -831,6 +833,19 @@ function M.rebase(buf, story, refs, created)
   }
   snapshots[buf] = snap
   return snap
+end
+
+--- Mark the snapshot of `buf` as out of date: saving is refused (with `reason`) until the story
+--- is reloaded (`:e!`). Used when a save sent changes but the story could not be fetched again,
+--- so the snapshot still shows the story from before them: saving against it would send them
+--- twice.
+---@param buf integer
+---@param reason string
+function M.invalidate(buf, reason)
+  local snap = snapshots[buf]
+  if snap then
+    snap.stale = reason
+  end
 end
 
 --- A message for a failed story fetch.

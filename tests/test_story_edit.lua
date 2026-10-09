@@ -627,6 +627,80 @@ T['failures']['a task created before a failure is not created twice'] = function
   eq(child.lua_get('#_G.server.tasks'), 4)
 end
 
+--- Make the next `GET /stories/301` after a write fail, once.
+local function fail_reload()
+  child.lua([[
+    local routes = _G.routes
+    _G.routes = function(req)
+      local path = req.url:gsub('^https://api%.app%.shortcut%.com/api/v3', ''):gsub('%?.*', '')
+      if req.method ~= 'GET' then
+        _G.wrote = true
+      elseif path == '/stories/301' and _G.wrote and not _G.reload_failed then
+        _G.reload_failed = true
+        return { status = 500, body = '{"message": "Down"}' }
+      end
+      return routes(req)
+    end
+  ]])
+end
+
+T['failures']['a failed reload refuses further saves until :e!'] = function()
+  fail_reload()
+  child.api.nvim_buf_set_lines(0, 24, 24, false, { '- [ ] Brand new' })
+  write()
+  eq(writes(), {
+    {
+      method = 'POST',
+      path = '/stories/301/tasks',
+      body = { description = 'Brand new', complete = false },
+    },
+  })
+  eq(last_message().level, WARN)
+  eq(
+    last_message().msg:find('sc-301 saved (1 task added), but reloading it failed', 1, true) ~= nil,
+    true
+  )
+  -- The buffer does not show what was loaded.
+  eq(child.bo.modified, true)
+  eq(child.bo.modifiable, true)
+  -- Neither :w nor :w! sends anything: the task would be created twice.
+  child.lua('_G.writes = {}')
+  for _, bang in ipairs({ false, true }) do
+    write(bang)
+    eq(writes(), {})
+    eq(last_message(), {
+      msg = 'shortcut.nvim: failed to save sc-301: sc-301 was saved, but could not be reloaded '
+        .. 'afterwards, so the buffer is out of date; :e! reloads it (saving again now could send '
+        .. 'the same changes twice)',
+      level = ERROR,
+    })
+  end
+  eq(child.lua_get('#_G.server.tasks'), 4)
+  -- :e! makes it savable again.
+  child.cmd('edit!')
+  child.lua('vim.wait(20); _G.wait_loaded()')
+  eq(lines()[25], '- [ ] Brand new')
+  write()
+  eq(writes(), {})
+  eq(last_message(), { msg = 'shortcut.nvim: sc-301: no changes', level = INFO })
+end
+
+T['failures']['a failed reload after a partial failure refuses further saves too'] = function()
+  fail_reload()
+  child.lua([[_G.fail['PUT /stories/301/tasks/312'] = { status = 500, body = '{}' }]])
+  child.api.nvim_buf_set_lines(0, 24, 24, false, { '- [ ] Brand new' })
+  set_line(23, '- [x] Open task')
+  write()
+  eq(#writes(), 2)
+  eq(child.bo.modified, true)
+  eq(last_message().msg:find('Reloading the story failed too', 1, true) ~= nil, true)
+  child.lua([[_G.fail = {}; _G.writes = {}]])
+  write(true)
+  eq(writes(), {})
+  eq(last_message().msg:find('could not be reloaded afterwards', 1, true) ~= nil, true)
+  eq(child.lua_get('#_G.server.tasks'), 4)
+end
+
 T['the buffer is read-only while saving, and saves do not overlap'] = function()
   child.lua([[
     local routes = _G.routes
