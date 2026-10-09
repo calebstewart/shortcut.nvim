@@ -13,6 +13,7 @@ nothing to set up.
 
 - Neovim >= 0.12
 - `curl`
+- Optional: `git`, to find the story of the current branch
 - Optional: [snacks.nvim](https://github.com/folke/snacks.nvim) for the pickers (falls back to
   `vim.ui.select`)
 
@@ -125,20 +126,52 @@ the background while the old copy keeps being used, so working offline never mak
 failed refetch is retried after a minute. The file is readable only by you (it contains member names, but
 not the token or email addresses). `:checkhealth shortcut` shows how old each list is.
 
-To fetch everything again now (e.g. after adding a label), clear the cache:
-
-```lua
-require('shortcut.cache').clear()
-```
+To fetch everything again now (e.g. after adding a label), run `:Shortcut refresh`.
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `:Shortcut story {id \| sc-<id> \| url}` | Open a story |
+| `:Shortcut story [id \| sc-<id> \| url]` | Open a story; without an argument, the git branch's story |
 | `:Shortcut epic {id \| sc-<id> \| url}` | Open an epic |
+| `:Shortcut comment [target]` | Write a comment on the story in a floating window; `:w` posts it |
+| `:Shortcut state [target] [state]` | Move the story to another workflow state |
+| `:Shortcut browse [target]` | Open the story or epic in the browser |
+| `:Shortcut yank [target]` | Copy the URL of the story or epic |
+| `:Shortcut refresh` | Fetch the lookup lists again and reload the current Shortcut buffer |
 | `:Shortcut login` | Save an API token to the shared `short` config |
 | `:Shortcut help` | List available subcommands |
+
+### The current story
+
+`comment`, `state`, `browse` and `yank` work on "the current story", which is the first of:
+
+1. **the argument** (`[target]`), if given: an ID, `sc-<id>`, or a Shortcut link;
+2. **the current buffer**, if it is a story or epic buffer (or a comment being written);
+3. **the git branch** of the current file's repository (or, for buffers that are not files, of
+   the working directory): the first `sc-<id>` in the branch name, as in Shortcut's
+   `<user>/sc-<id>/<slug>` format. A detached HEAD or a directory outside git does not count.
+
+Otherwise the command explains how to name a story. `:Shortcut story` with no argument uses the
+git branch only. `comment` and `state` work on stories; `browse` and `yank` on epics too (a
+bare ID is looked up to find out which it is).
+
+- **`:Shortcut comment`** opens a floating Markdown buffer titled `Comment on sc-<id>: <title>`.
+  `:w` posts it and closes the float (`:wq` works too); `:q!` discards it. Empty comments are not
+  posted. If posting fails, the text stays in the buffer. Afterwards the story's buffer, if
+  open, is reloaded to show the comment, unless it has unsaved changes.
+- **`:Shortcut state`** lists the states of the story's workflow in order, the current one
+  marked, with `vim.ui.select`. Give a state name to move the story directly; names are
+  completed with `<Tab>` (the current story buffer's workflow, or every workflow's) and matched
+  ignoring case, and may contain spaces (`:Shortcut state In Progress`). The target, if any,
+  comes first (`:Shortcut state 123 Done`). The story's buffer, if open, is reloaded; if it has
+  unsaved changes, you are warned that its header is stale.
+- **`:Shortcut browse`** opens the story's link with `vim.ui.open()`.
+- **`:Shortcut yank`** copies the link to the unnamed register and the clipboard (`+`, and `*`
+  when it is a separate selection, as on X11).
+- **`:Shortcut refresh`** clears the [lookup-list cache](#lookup-list-cache) (in memory and on
+  disk) and fetches the lists again in the background. If the current buffer is a story or epic
+  without unsaved changes, it is reloaded too.
 
 ## Opening stories and epics
 
