@@ -35,11 +35,26 @@ function M.strip_location(err)
   if traceback then
     msg = msg:sub(1, traceback - 1)
   end
-  msg = msg:gsub('^%[string "[^\n]-"%]:%d+: ', '', 1):gsub('^[^\n]-%.lua:%d+: ', '', 1)
+  -- Only a position at the very start, with no space in its path (`/x/y.lua:3: `,
+  -- `.../y.lua:3: `), never a `.lua:<n>: ` further on in the message.
+  msg = msg:gsub('^%[string "[^\n]-"%]:%d+: ', '', 1):gsub('^%S-%.lua:%d+: ', '', 1)
   return msg
 end
 
-local cpo_restore_pending = false
+--- Whether `refuse_write()` added `+` to 'cpoptions' (and has not removed it yet).
+local cpo_added = false
+
+local CPO_GROUP = 'shortcut.notify.cpo'
+
+--- Remove the `+` that `refuse_write()` added, if it is still there.
+local function restore_cpo()
+  if not cpo_added then
+    return
+  end
+  cpo_added = false
+  pcall(vim.api.nvim_del_augroup_by_name, CPO_GROUP)
+  vim.o.cpoptions = (vim.o.cpoptions:gsub('%+', ''))
+end
 
 --- Refuse a write, from a `BufWriteCmd`, `FileWriteCmd` or `FileAppendCmd` handler: report `msg`
 --- as an error and make the write fail, so that `:wq {file}` and `:x {file}` don't go on to close
@@ -48,19 +63,28 @@ local cpo_restore_pending = false
 --- Raising a Lua error doesn't do that when the command is typed (Neovim reports the error, with
 --- a stack trace, and quits anyway). A write handler makes a write fail by leaving the buffer
 --- modified, but Neovim only checks that for a write to the buffer's own name, unless
---- 'cpoptions' contains `+`: so `+` is added until the command has finished. The message is
---- shown then too, so that it is not presented as an error in an autocommand.
+--- 'cpoptions' contains `+`: so `+` is added for this write only. It is removed once the command
+--- has finished, or as soon as any other write starts (`:w a.md | wincmd p | w b.txt`): with it,
+--- `:w {file}` of an ordinary buffer would reset that buffer's 'modified'. The message is shown
+--- once the command has finished, so that it is not presented as an error in an autocommand.
 ---@param msg string
 function M.refuse_write(msg)
-  if not vim.o.cpoptions:find('+', 1, true) then
+  if not cpo_added and not vim.o.cpoptions:find('+', 1, true) then
     vim.o.cpoptions = vim.o.cpoptions .. '+'
-    cpo_restore_pending = true
+    cpo_added = true
+    -- The Pre event of every other kind of write. (A write handled by another `BufWriteCmd`
+    -- never resets 'modified' by itself.)
+    vim.api.nvim_create_autocmd(
+      { 'BufWritePre', 'FileWritePre', 'FileAppendPre', 'FilterWritePre' },
+      {
+        group = vim.api.nvim_create_augroup(CPO_GROUP, { clear = true }),
+        desc = "shortcut.nvim: remove the 'cpoptions' + of a refused write",
+        callback = restore_cpo,
+      }
+    )
   end
   vim.schedule(function()
-    if cpo_restore_pending then
-      cpo_restore_pending = false
-      vim.o.cpoptions = (vim.o.cpoptions:gsub('%+', ''))
-    end
+    restore_cpo()
     M.error(msg)
   end)
 end
