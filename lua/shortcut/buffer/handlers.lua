@@ -343,6 +343,11 @@ local function load(buf, target, opts)
           set_lines(buf, lines)
         end
         vim.bo[buf].modifiable = true
+        -- A picker preview of the object may be older than what was just loaded.
+        local picker = package.loaded['shortcut.picker']
+        if picker then
+          picker.invalidate_preview(kind, id)
+        end
       end
       vim.bo[buf].modified = false
     end)

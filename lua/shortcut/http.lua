@@ -78,8 +78,19 @@ local MAX_RETRY_AFTER = 60
 
 ---@alias shortcut.http.Transport fun(req: shortcut.http.TransportRequest, done: fun(res: shortcut.http.TransportResult)): { cancel: fun() }?
 
+--- Write requests (anything but GET) that have finished or been cancelled. See `writes()`.
+local writes = 0
+
+--- How many write requests (anything but GET) have finished, failed or been cancelled so far.
+--- Data fetched before this changed (e.g. a picker preview) may no longer match the server.
+---@return integer
+function M.writes()
+  return writes
+end
+
 ---@class shortcut.http.Handle
 ---@field _cancelled boolean
+---@field _write? boolean A write request: cancelling it counts in `writes()`.
 ---@field _cancel_current? fun() Stops whatever is in progress: the curl process or a retry timer.
 local Handle = {}
 Handle.__index = Handle
@@ -90,6 +101,10 @@ function Handle:cancel()
     return
   end
   self._cancelled = true
+  if self._write then
+    -- It may have reached the server already.
+    writes = writes + 1
+  end
   if self._cancel_current then
     pcall(self._cancel_current)
     self._cancel_current = nil
@@ -431,12 +446,17 @@ function M.request(req, callback)
   local method = (req.method or 'GET'):upper()
   local path = req.path
   local handle = new_handle()
+  handle._write = method ~= 'GET' or nil
 
   ---@param err? shortcut.http.Error
   ---@param data? any
   ---@param response? shortcut.http.Response
   local function finish(err, data, response)
     handle._cancel_current = nil
+    if handle._write then
+      handle._write = nil
+      writes = writes + 1
+    end
     vim.schedule(function()
       if not handle._cancelled then
         callback(err, data, response)

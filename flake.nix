@@ -169,8 +169,9 @@
             pkgs.gnumake
             pkgs.nixfmt
           ];
-          # Used by the Makefile/tests instead of cloning mini.nvim into deps/.
+          # Used by the Makefile/tests instead of cloning mini.nvim and snacks.nvim into deps/.
           MINI_NVIM = "${pkgs.vimPlugins.mini-nvim}";
+          SNACKS_NVIM = "${pkgs.vimPlugins.snacks-nvim}";
         };
       });
 
@@ -187,6 +188,7 @@
                 pkgs.git
               ];
               MINI_NVIM = "${pkgs.vimPlugins.mini-nvim}";
+              SNACKS_NVIM = "${pkgs.vimPlugins.snacks-nvim}";
             }
             ''
               cp -r ${testSrc} src
