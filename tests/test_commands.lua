@@ -59,9 +59,9 @@ end
 T['completion'] = new_set()
 
 T['completion']['lists subcommands'] = function()
-  eq(complete('Shortcut '), { 'epic', 'help', 'login', 'story' })
+  eq(complete('Shortcut '), { 'epic', 'epics', 'help', 'login', 'mine', 'search', 'story' })
   add_fake_lazy()
-  eq(complete('Shortcut '), { 'epic', 'fake', 'help', 'login', 'story' })
+  eq(complete('Shortcut '), { 'epic', 'epics', 'fake', 'help', 'login', 'mine', 'search', 'story' })
   eq(complete('Shortcut h'), { 'help' })
   eq(complete('Shortcut! f'), { 'fake' })
 end
@@ -106,7 +106,7 @@ T['dispatch']['shows the subcommand list with no arguments'] = function()
   eq(msgs[1].level, vim.log.levels.INFO)
   expect.no_error(function()
     assert(msgs[1].msg:find('usage: :Shortcut', 1, true))
-    assert(msgs[1].msg:find('help   List available subcommands', 1, true))
+    assert(msgs[1].msg:find('help    List available subcommands', 1, true))
   end)
 end
 
@@ -114,7 +114,7 @@ T['dispatch']['help lists lazy subcommands with descriptions'] = function()
   add_fake_lazy()
   child.cmd('Shortcut help')
   expect.no_error(function()
-    assert(messages()[1].msg:find('fake   A fake subcommand', 1, true))
+    assert(messages()[1].msg:find('fake    A fake subcommand', 1, true))
   end)
 end
 

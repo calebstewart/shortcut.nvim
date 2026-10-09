@@ -25,6 +25,9 @@ M.lazy = {
   story = { module = 'shortcut.buffer.commands', desc = 'Open a story by ID, sc-<id> or URL' },
   epic = { module = 'shortcut.buffer.commands', desc = 'Open an epic by ID, sc-<id> or URL' },
   login = { module = 'shortcut.login', desc = 'Save an API token to the shared `short` CLI config' },
+  search = { module = 'shortcut.picker', desc = 'Search stories (live with snacks.nvim)' },
+  mine = { module = 'shortcut.picker', desc = 'Your unfinished stories' },
+  epics = { module = 'shortcut.picker', desc = 'Search epics (live with snacks.nvim)' },
 }
 
 ---@type table<string, shortcut.Subcommand>
