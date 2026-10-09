@@ -232,8 +232,22 @@ commands.register('comment', {
 -- state
 ---------------------------------------------------------------------------------------------------
 
---- Split `[target] [state name...]`: the first argument is the target if it names one; the
---- rest is the state name (which may contain spaces).
+--- Whether the first of `args` is the target of `:Shortcut state`, rather than the start of a
+--- state name. `sc-<id>` and links always are. A bare ID only is when it is the only argument:
+--- with words after it, `2 Review` is read as a state name, so that a hand-typed name starting
+--- with digits never moves another story. (Give the story as `sc-<id>` then.)
+---@param args string[]
+---@return boolean
+local function state_target_first(args)
+  local first = args[1]
+  if not first or not target.parse_arg(first) then
+    return false
+  end
+  return not first:match('^%d+$') or #args == 1
+end
+
+--- Split `[target] [state name...]` (see `state_target_first()`). The state name may contain
+--- spaces.
 ---@param args string[]
 ---@return string? arg
 ---@return string? name
@@ -242,7 +256,7 @@ function M.state_args(args)
     return nil, nil
   end
   local first, rest = nil, args
-  if target.parse_arg(args[1]) then
+  if state_target_first(args) then
     first, rest = args[1], vim.list_slice(args, 2)
   end
   local name = vim.trim(table.concat(rest, ' '))
@@ -310,6 +324,10 @@ commands.register('state', {
       if name then
         local found, err = cache.state_by_name(workflow.id, name)
         if not found then
+          local id = name:match('^(%d+)%s')
+          if id then
+            err = ('%s; to name story %s, write sc-%s'):format(err, id, id)
+          end
           error(err, 0)
         end
         chosen = found
@@ -394,10 +412,11 @@ function M.complete_state(arglead, args)
   local words = vim.tbl_map(function(w)
     return (w:gsub('\\(.)', '%1'))
   end, args)
-  if #words > 0 and target.parse_arg(words[1]) then
+  local lead = arglead:gsub('\\(.)', '%1')
+  -- As `state_args()` will read the command line: the word being completed is part of it.
+  if #words > 0 and state_target_first(vim.list_extend(vim.list_slice(words), { lead })) then
     table.remove(words, 1)
   end
-  local lead = arglead:gsub('\\(.)', '%1')
   local typed = table.concat(words, ' ')
   typed = (typed ~= '' and (typed .. ' ') or '') .. lead
   local offset = #typed - #lead

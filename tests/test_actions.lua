@@ -196,6 +196,95 @@ T['comment'][':w never goes through the story loader or saver'] = function()
   eq(messages(), { { msg = 'shortcut.nvim: comment posted on sc-301', level = 2 } })
 end
 
+T['comment']['writing it anywhere else posts nothing and writes no file'] = function()
+  open_comment('301')
+  child.cmd('stopinsert')
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'draft', 'two' })
+  local file = child.lua_get('_G.dir') .. '/x.md'
+  for _, cmd in ipairs({
+    'write ' .. file,
+    'write! ' .. file,
+    'saveas ' .. file,
+    'write shortcut://story/5',
+    'write >> ' .. file,
+    '1write ' .. file,
+    '1,1write!',
+    'write !cat > /dev/null',
+  }) do
+    child.lua('_G.messages = {}')
+    pcall(child.cmd, cmd)
+    child.lua('vim.wait(50)')
+    eq({ cmd = cmd, writes = writes() }, { cmd = cmd, writes = {} })
+    eq(child.lua_get('vim.uv.fs_stat(...) == nil', { file }), true)
+    eq(child.api.nvim_buf_get_name(0), 'shortcut://story/301/comment')
+    eq(child.bo.modified, true)
+    if not vim.startswith(cmd, 'write !') then
+      eq({ cmd = cmd, n = #messages() }, { cmd = cmd, n = 1 })
+      expect.no_error(function()
+        assert(messages()[1].msg:find('cannot write the comment to ', 1, true), cmd)
+      end)
+    end
+  end
+  -- And `:w` still posts.
+  child.cmd('write')
+  wait_messages(1)
+  eq(#writes(), 1)
+end
+
+T['comment'][':w!, :x and :update each post once'] = function()
+  for _, cmd in ipairs({ 'write!', 'xit', 'update' }) do
+    child.lua('_G.requests = {}; _G.messages = {}')
+    open_comment('301')
+    child.api.nvim_buf_set_lines(0, 0, -1, false, { cmd })
+    child.cmd(cmd)
+    wait_messages(1)
+    child.lua('vim.wait(50)')
+    eq(writes(), { { method = 'POST', path = '/stories/301/comments', body = { text = cmd } } })
+    eq(child.lua_get('vim.api.nvim_win_get_config(0).relative'), '')
+  end
+end
+
+T['comment']['exiting waits for the post, and saves the draft if it fails'] = function()
+  -- Success: nothing saved.
+  open_comment('301')
+  child.api.nvim_buf_set_lines(0, 0, -1, false, { 'fine' })
+  child.cmd('write')
+  child.lua([[require('shortcut.buffer.comment').on_exit()]])
+  eq(#writes(), 1)
+  eq(child.lua_get([[vim.fn.glob(require('shortcut.buffer.comment').unsent_dir() .. '/*')]]), '')
+
+  -- Failure while exiting: no float reopened, the draft is saved.
+  child.restart({ '-u', 'tests/minimal_init.lua' })
+  child.lua(
+    [[
+    vim.env.SHORTCUT_API_TOKEN = ...
+    dofile(vim.fn.getcwd() .. '/tests/fake_transport.lua')
+    _G.responses = { { status = 500 } }
+    _G.stderr = {}
+    io.stderr = { write = function(_, s) table.insert(_G.stderr, s) end }
+    local comment = require('shortcut.buffer.comment')
+    comment.open(301, { title = 'x' })
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'not lost' })
+    vim.cmd('wq')
+    comment.on_exit()
+  ]],
+    { TOKEN }
+  )
+  local files = child.lua_get(
+    [[vim.fn.glob(require('shortcut.buffer.comment').unsent_dir() .. '/comment-sc-301-*.md', false, true)]]
+  )
+  eq(#files, 1)
+  eq(child.fn.readfile(files[1]), { 'not lost' })
+  eq(child.lua_get('#vim.api.nvim_list_wins()'), 1)
+  expect.no_error(function()
+    assert(
+      child
+        .lua_get('_G.stderr[1]')
+        :find('the comment on sc-301 was not posted; it was saved to', 1, true)
+    )
+  end)
+end
+
 T['comment']['an empty comment is rejected'] = function()
   open_comment('301')
   child.api.nvim_buf_set_lines(0, 0, -1, false, { '', '   ', '' })
@@ -409,7 +498,7 @@ T['state']['cancelling changes nothing'] = function()
 end
 
 T['state']['a name applies directly'] = function()
-  state('301 done')
+  state('sc-301 done')
   wait_messages(1)
   eq(child.lua_get('_G.selects'), {})
   eq(writes(), { { method = 'PUT', path = '/stories/301', body = { workflow_state_id = 503 } } })
@@ -429,14 +518,14 @@ T['state']['a name with spaces, from the story buffer'] = function()
 end
 
 T['state']['the current state is not sent again'] = function()
-  state([[301 In\ Progress]])
+  state([[sc-301 In\ Progress]])
   wait_messages(1)
   eq(writes(), {})
   eq(messages(), { { msg = 'shortcut.nvim: sc-301 is already in In Progress', level = 2 } })
 end
 
 T['state']['an unknown name is an error'] = function()
-  state('301 Shipped')
+  state('sc-301 Shipped')
   wait_messages(1)
   eq(writes(), {})
   eq(messages(), {
@@ -447,9 +536,56 @@ T['state']['an unknown name is an error'] = function()
   })
 end
 
+T['state']['a bare ID followed by words is part of the state name'] = function()
+  -- Story 2 exists and has a 'Review' state: it must not be touched.
+  child.lua([[
+    local s = vim.json.decode(_G.fixture('story_render'))
+    s.id = 2
+    _G.overrides['GET /stories/2'] = { status = 200, body = vim.json.encode(s) }
+    _G.overrides['PUT /stories/2'] = { status = 200, body = vim.json.encode(s) }
+    local w = vim.json.decode(_G.fixture('workflows'))
+    w[1].states[1].name = 'Review'
+    _G.overrides['GET /workflows'] = { status = 200, body = vim.json.encode(w) }
+  ]])
+  open_story()
+  state('2 Review')
+  wait_messages(1)
+  eq(writes(), {})
+  eq(count('GET /stories/2'), 0)
+  eq(messages(), {
+    {
+      msg = "shortcut.nvim: state: unknown state '2 Review' in workflow 'Engineering' (did you mean 'Review'?); to name story 2, write sc-2",
+      level = 4,
+    },
+  })
+  -- A bare ID alone is still the target.
+  child.lua('_G.choose = nil')
+  state('2')
+  child.lua([[vim.wait(2000, function() return #_G.selects > 0 end, 5)]])
+  eq(child.lua_get('_G.selects[1].prompt'), 'State of sc-2: Render me')
+end
+
+T['state']['state_args()'] = function()
+  local function split(args)
+    return child.lua_get(
+      '(function(a) local t, n = require("shortcut.actions").state_args(a); return { arg = t, name = n } end)(...)',
+      { args }
+    )
+  end
+  eq(split({}), {})
+  eq(split({ '301' }), { arg = '301' })
+  eq(split({ 'sc-301', 'In', 'Progress' }), { arg = 'sc-301', name = 'In Progress' })
+  eq(split({ '301', 'Done' }), { name = '301 Done' })
+  eq(split({ 'https://app.shortcut.com/acme/story/301', 'Done' }), {
+    arg = 'https://app.shortcut.com/acme/story/301',
+    name = 'Done',
+  })
+  eq(split({ 'In', 'Progress' }), { name = 'In Progress' })
+end
+
 T['state']['a failed update is reported'] = function()
   child.lua([[_G.overrides['PUT /stories/301'] = { status = 422, body = '{"message": "no"}' }]])
-  state('301 Done')
+  state('https://app.shortcut.com/acme/story/301 Done')
   wait_messages(1)
   eq(messages(), {
     {
@@ -489,7 +625,7 @@ T['state']['completes state names'] = function()
   )
   -- Every workflow's states.
   eq(complete('Shortcut state '), { 'Backlog', 'In\\ Progress', 'Done', 'To\\ Do', 'Shipped' })
-  eq(complete('Shortcut state 301 s'), { 'Shipped' })
+  eq(complete('Shortcut state sc-301 s'), { 'Shipped' })
   -- The rest of a name with spaces, typed as is or escaped.
   eq(complete('Shortcut state in p'), { 'Progress' })
   eq(complete('Shortcut state sc-301 In\\ P'), { 'In\\ Progress' })

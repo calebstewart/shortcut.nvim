@@ -556,9 +556,8 @@ end
 ---@param ev vim.api.keyset.create_autocmd.callback_args
 local function on_write(ev)
   local buf = ev.buf
-  local is_comment, owned = comment_buffer(buf, ev.match)
-  if is_comment and owned then
-    -- Posted by the comment buffer's own BufWriteCmd.
+  if vim.b[buf].shortcut_comment ~= nil then
+    -- A comment buffer, written to whatever name: its own BufWriteCmd posts it or refuses.
     return
   end
   local info = vim.b[buf].shortcut

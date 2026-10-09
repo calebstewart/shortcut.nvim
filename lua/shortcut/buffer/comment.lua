@@ -5,6 +5,12 @@
 --- story buffer routing in `shortcut.buffer.handlers` leaves it alone. `:w` posts and closes
 --- the float, `:q!` discards. An empty comment is not posted. If posting fails, the text stays
 --- in the buffer (and the float is reopened with it if it was closed meanwhile, e.g. by `:wq`).
+---
+--- Only a write to the buffer's own name posts; `:w file`, `:saveas`, partial writes etc. are
+--- refused. `:wall`/`:wqa`/`:xa` do post the draft: inside a `BufWriteCmd` they can't be told
+--- apart from `:w` in the float (Neovim makes the buffer current for the autocommand). So that
+--- `:wqa` never silently loses a comment, exiting waits for posts in flight and saves the drafts
+--- that fail (see `on_exit()`).
 local notify = require('shortcut.notify')
 local uri = require('shortcut.uri')
 
@@ -128,6 +134,70 @@ local function report_failure(id, err)
   notify.error(('failed to post the comment on sc-%d: %s'):format(id, err))
 end
 
+--- Longest wait for posts in flight when Neovim exits, in milliseconds.
+M.EXIT_WAIT = 15000
+
+--- Posts in flight, so that exiting (`:wqa`, `:xa`) waits for them.
+---@type table<table, { id: integer, lines: string[], done: boolean, ok: boolean }>
+local inflight = {}
+
+--- Set once Neovim is exiting: a failed post is saved to a file instead of reopened.
+local exiting = false
+
+--- Where drafts that could not be posted while exiting are saved.
+---@return string
+function M.unsent_dir()
+  return vim.fs.joinpath(vim.fn.stdpath('state') --[[@as string]], 'shortcut', 'unsent')
+end
+
+--- Save a draft that was not posted; returns the file, or `nil` if it could not be written.
+---@param id integer
+---@param lines string[]
+---@return string?
+local function save_unsent(id, lines)
+  local dir = M.unsent_dir()
+  local fs = require('shortcut.fs')
+  -- Private: drafts may be confidential.
+  if not fs.mkdir_p(dir, tonumber('700', 8)) then
+    return nil
+  end
+  local path = vim.fs.joinpath(dir, ('comment-sc-%d-%d.md'):format(id, os.time()))
+  local ok = fs.write_atomic(path, table.concat(lines, '\n') .. '\n')
+  return ok and path or nil
+end
+
+--- On exit, wait (at most `EXIT_WAIT`) for posts in flight, and save the drafts of those that
+--- fail or don't finish, so `:wqa` never silently loses a comment.
+function M.on_exit()
+  exiting = true
+  if next(inflight) == nil then
+    return
+  end
+  vim.wait(M.EXIT_WAIT, function()
+    for _, p in pairs(inflight) do
+      if not p.done then
+        return false
+      end
+    end
+    return true
+  end, 20)
+  for key, p in pairs(inflight) do
+    if not (p.done and p.ok) then
+      local path = save_unsent(p.id, p.lines)
+      local msg = ('shortcut.nvim: the comment on sc-%d was not posted%s'):format(
+        p.id,
+        path and ('; it was saved to ' .. path) or ''
+      )
+      -- The UI may already be gone: stderr is shown in the terminal after exit.
+      io.stderr:write(msg .. '\n')
+      pcall(vim.api.nvim_echo, { { msg, 'ErrorMsg' } }, true, {})
+    end
+    inflight[key] = nil
+  end
+end
+
+local exit_group ---@type integer?
+
 --- Post the comment in `buf`.
 ---@param buf integer
 function M.post(buf)
@@ -147,7 +217,20 @@ function M.post(buf)
     return
   end
 
+  if not exit_group then
+    exit_group = vim.api.nvim_create_augroup('shortcut.buffer.comment', { clear = true })
+    vim.api.nvim_create_autocmd('VimLeavePre', {
+      group = exit_group,
+      desc = 'shortcut.nvim: wait for comments being posted',
+      callback = function()
+        M.on_exit()
+      end,
+    })
+  end
+
   posting[buf] = true
+  local flight = { id = id, lines = lines, done = false, ok = false }
+  inflight[flight] = flight
   -- Not editable while posting: what is posted is what is in the buffer. Unmodified, so that
   -- `:wq` closes it; it is marked modified again if posting fails.
   vim.bo[buf].modifiable = false
@@ -155,9 +238,17 @@ function M.post(buf)
   local http = require('shortcut.http')
   require('shortcut.api.stories').comments.create(id, { text = text }, function(err)
     posting[buf] = nil
+    flight.done, flight.ok = true, not err
+    if not exiting then
+      inflight[flight] = nil
+    end
     local valid = vim.api.nvim_buf_is_valid(buf)
     if err then
       local msg = err.status == 404 and ('sc-%d not found'):format(id) or http.format_error(err)
+      if exiting then
+        -- `on_exit()` saves the draft.
+        return
+      end
       if valid then
         vim.bo[buf].modifiable = true
         vim.bo[buf].modified = true
@@ -167,6 +258,9 @@ function M.post(buf)
         M.open(id, { lines = lines, title = info.title })
         report_failure(id, msg .. '; the comment has been reopened')
       end
+      return
+    end
+    if exiting then
       return
     end
     if valid then
@@ -189,6 +283,33 @@ function M.post(buf)
       notify.info(('comment posted on sc-%d'):format(id))
     end
   end)
+end
+
+--- The `BufWriteCmd` of a comment buffer: only a write of the buffer to its own name (`:w`,
+--- `:w!`, `:wq`, `:x`, `:up`) posts. Writing it elsewhere (`:w file`, `:saveas file`,
+--- `:w shortcut://story/<id>`) is refused and sends nothing.
+---@param ev vim.api.keyset.create_autocmd.callback_args
+function M.on_write(ev)
+  local buf = ev.buf
+  local info = vim.b[buf].shortcut_comment
+  if type(info) ~= 'table' then
+    return
+  end
+  local name = uri.comment_name(info.id)
+  local current = vim.api.nvim_buf_get_name(buf)
+  if ev.match ~= name or current ~= name then
+    if current ~= name then
+      -- `:saveas` renamed the buffer before writing: give it its name back.
+      pcall(vim.api.nvim_buf_set_name, buf, name)
+    end
+    notify.error(
+      ('cannot write the comment to %s: :w posts it, :q! discards it'):format(
+        notify.flatten(ev.match)
+      )
+    )
+    return
+  end
+  M.post(buf)
 end
 
 ---@class shortcut.comment.OpenOpts
@@ -249,7 +370,19 @@ function M.open(id, opts)
     buffer = buf,
     desc = 'shortcut.nvim: post the comment',
     callback = function(ev)
-      M.post(ev.buf)
+      M.on_write(ev)
+    end,
+  })
+  -- Part of the buffer (`:1,2w`, `:w >> file`): never posted, and never written anywhere.
+  vim.api.nvim_create_autocmd({ 'FileWriteCmd', 'FileAppendCmd' }, {
+    buffer = buf,
+    desc = 'shortcut.nvim: refuse partial writes of a comment',
+    callback = function(ev)
+      notify.error(
+        ('cannot write the comment to %s: :w posts it, :q! discards it'):format(
+          notify.flatten(ev.match)
+        )
+      )
     end,
   })
   vim.api.nvim_create_autocmd('BufWipeout', {

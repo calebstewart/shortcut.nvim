@@ -160,12 +160,21 @@ bare ID is looked up to find out which it is).
   `:w` posts it and closes the float (`:wq` works too); `:q!` discards it. Empty comments are not
   posted. If posting fails, the text stays in the buffer. Afterwards the story's buffer, if
   open, is reloaded to show the comment, unless it has unsaved changes.
+
+  Only writing the float to its own name posts (`:w`, `:w!`, `:wq`, `:x`, `:update`). Writing
+  it anywhere else (`:w file`, `:saveas file`, `:1,2w file`, `:w >> file`) is refused: nothing
+  is posted and no file is written. Like any modified buffer, the draft is also written, and so
+  **posted**, by `:wall`, `:wqa` and `:xa`, even from another window. When Neovim exits with a
+  comment still being posted, it waits for the answer (up to 15 seconds); a comment that could
+  not be posted is saved under `stdpath('state')/shortcut/unsent/` and the path is printed.
 - **`:Shortcut state`** lists the states of the story's workflow in order, the current one
   marked, with `vim.ui.select`. Give a state name to move the story directly; names are
   completed with `<Tab>` (the current story buffer's workflow, or every workflow's) and matched
   ignoring case, and may contain spaces (`:Shortcut state In Progress`). The target, if any,
-  comes first (`:Shortcut state 123 Done`). The story's buffer, if open, is reloaded; if it has
-  unsaved changes, you are warned that its header is stale.
+  comes first, as `sc-<id>` or a link (`:Shortcut state sc-123 Done`). A bare ID is the target
+  only on its own (`:Shortcut state 123`): followed by more words it is read as the start of the
+  state name, so a state named `2 Review` never moves story 2. The story's buffer, if open, is
+  reloaded; if it has unsaved changes, you are warned that its header is stale.
 - **`:Shortcut browse`** opens the story's link with `vim.ui.open()`.
 - **`:Shortcut yank`** copies the link to the unnamed register and the clipboard (`+`, and `*`
   when it is a separate selection, as on X11).
