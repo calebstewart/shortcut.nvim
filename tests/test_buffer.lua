@@ -330,12 +330,24 @@ T['redirect details']['jump to the comment in an already-open buffer'] = functio
 end
 
 T['redirect details']['work from the command line'] = function()
-  child.restart({ '-u', 'tests/minimal_init.lua', URL })
+  -- Files on the command line are read before VimEnter, with the net plugin sourced after this
+  -- one: only the guard in our own handler stops the download.
+  child.restart({
+    '--cmd',
+    'lua _G.requests = {}; vim.net.request = function(url) table.insert(_G.requests, url) end',
+    '--cmd',
+    'lua _G.messages = {}; vim.notify = function(msg) table.insert(_G.messages, msg) end',
+    '-u',
+    'tests/minimal_init.lua',
+    URL,
+  })
   child.lua(
     [[vim.wait(1000, function() return vim.api.nvim_buf_get_name(0) == 'shortcut://story/123' end)]]
   )
   eq(cur_name(), 'shortcut://story/123')
   eq(buffers(), { 'shortcut://story/123' })
+  eq(child.lua_get('_G.requests'), {})
+  eq(messages(), {})
 end
 
 T['workspace'] = new_set()
