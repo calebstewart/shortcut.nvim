@@ -442,6 +442,13 @@ function M.clear()
   end
 end
 
+--- Bumped by every `clear()`: data derived from the lists (e.g. picker previews) made under
+--- another generation is outdated.
+---@return integer
+function M.generation()
+  return generation
+end
+
 --- What is cached on disk, for `:checkhealth`.
 ---@return { slug: string, path: string, lists?: table<shortcut.refs.Kind, { fetched_at: integer, count: integer }>, invalid?: boolean }[]
 function M.disk_info()
