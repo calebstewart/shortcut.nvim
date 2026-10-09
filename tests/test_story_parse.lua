@@ -435,6 +435,8 @@ T['task descriptions that look like owners are escaped'] = function()
   -- Ends in ` · @word` but has no owners: the dot is escaped.
   eq(line('Email team · @jdoe'), '- [ ] Email team \\· @jdoe')
   eq(line('a · @x · @y'), '- [ ] a · @x \\· @y')
+  eq(line('· @jdoe'), '- [ ] \\· @jdoe')
+  eq(line('· @jdoe', { JDOE }), '- [ ] \\· @jdoe · @jdoe')
   eq(line('Email team · @jdoe', { JDOE }), '- [ ] Email team \\· @jdoe · @jdoe')
   -- Backslashes right before a dot are doubled; nothing else changes.
   eq(line('a \\· b'), '- [ ] a \\\\· b')
@@ -462,7 +464,8 @@ T['task descriptions that look like owners are escaped'] = function()
 end
 
 T['task descriptions round-trip, whatever they contain'] = function()
-  local alphabet = { 'a', 'b', ' ', ' ', '·', '\\', '@', '@x', ' · ', ' · @y' }
+  -- Including descriptions starting with a separator (`· @y`).
+  local alphabet = { 'a', 'b', ' ', ' ', '·', '\\', '@', '@x', ' · ', ' · @y', '· @y' }
   local seed = 12345
   local function rand(n)
     seed = (seed * 1103515245 + 12345) % 2147483648
@@ -476,12 +479,16 @@ T['task descriptions round-trip, whatever they contain'] = function()
     local description = vim.trim(table.concat(parts))
     if description ~= '' then
       for _, owner_ids in ipairs({ {}, { JDOE, ALEX } }) do
-        local text = story
-          .task_line({ description = description, owner_ids = owner_ids }, REFS, true)
-          :gsub('^%- %[ %] ', '')
-        local d, owners = parse.split_owners(text)
+        -- Through the parser itself.
+        local p = assert(parse.parse(story.render(
+          fixture_story(function(x)
+            x.tasks = { { id = 1, description = description, owner_ids = owner_ids } }
+          end),
+          REFS
+        )))
+        local t = p.tasks[1]
         eq(
-          { description, #owner_ids, story.unescape_task(d), #owners },
+          { description, #owner_ids, t.description, #t.owners },
           { description, #owner_ids, description, #owner_ids }
         )
       end

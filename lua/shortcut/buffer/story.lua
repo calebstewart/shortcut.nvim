@@ -359,11 +359,14 @@ function M.escape_task(description)
   local s = description:gsub('(\\+)' .. DOT, function(bs)
     return bs .. bs .. DOT
   end)
-  local last = owner_suffix(s)
+  -- What the parser splits: the text after the checkbox, with its leading space (so that a
+  -- description starting with `· @word` counts too).
+  local last = owner_suffix(' ' .. s)
   if last then
-    -- The dot is right after the separator's leading space. One escape is enough: every
-    -- earlier ` · ` is now followed by the `\·` word, which is not a mention.
-    s = s:sub(1, last) .. '\\' .. s:sub(last + 1)
+    -- The dot is right after the separator's leading space: at `last + 1` in `' ' .. s`, so
+    -- `last` in `s`. One escape is enough: every earlier ` · ` is now followed by the `\·`
+    -- word, which is not a mention.
+    s = s:sub(1, last - 1) .. '\\' .. s:sub(last)
   end
   return s
 end
