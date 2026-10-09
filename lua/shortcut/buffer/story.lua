@@ -297,16 +297,103 @@ local function by_position(a, b)
   return (tonumber(a.id) or 0) < (tonumber(b.id) or 0)
 end
 
---- A task line, without its extmark.
+--- The middle dot of `SEPARATOR`.
+local DOT = '·'
+
+--- Where the owners start in a task's text: the byte index of the last ` · ` followed only by
+--- `@mention`s, and those mentions (without `@`). `nil` if there are none.
+---@param text string
+---@return integer? index
+---@return string[]? owners
+local function owner_suffix(text)
+  local sep = M.SEPARATOR
+  local last ---@type integer?
+  local from = 1
+  while true do
+    local i = text:find(sep, from, true)
+    if not i then
+      break
+    end
+    last = i
+    from = i + 1
+  end
+  if not last then
+    return nil
+  end
+  local suffix = vim.trim(text:sub(last + #sep))
+  if suffix == '' then
+    return nil
+  end
+  local owners = {}
+  for word in suffix:gmatch('%S+') do
+    local mention = word:match('^@(.+)$')
+    if not mention then
+      return nil
+    end
+    table.insert(owners, mention)
+  end
+  return last, owners
+end
+
+--- Split the text of a task line (shown with owners) into its description and owners: the
+--- last ` · ` followed only by `@mention`s separates them. The description is still escaped
+--- (see `escape_task()`).
+---@param text string
+---@return string description
+---@return string[] owners
+function M.split_owners(text)
+  local last, owners = owner_suffix(text)
+  if last and owners then
+    return vim.trim(text:sub(1, last - 1)), owners
+  end
+  return vim.trim(text), {}
+end
+
+--- A task description as written on its line when owners are shown, so that it can never be
+--- read as having owners (`unescape_task()` is the inverse). A description that itself ends in
+--- ` · @word` gets a backslash before that dot (` \· @word`), and backslashes right before a dot
+--- are doubled. Anything else is unchanged.
+---@param description string One line.
+---@return string
+function M.escape_task(description)
+  local s = description:gsub('(\\+)' .. DOT, function(bs)
+    return bs .. bs .. DOT
+  end)
+  -- What the parser splits: the text after the checkbox, with its leading space (so that a
+  -- description starting with `· @word` counts too).
+  local last = owner_suffix(' ' .. s)
+  if last then
+    -- The dot is right after the separator's leading space: at `last + 1` in `' ' .. s`, so
+    -- `last` in `s`. One escape is enough: every earlier ` · ` is now followed by the `\·`
+    -- word, which is not a mention.
+    s = s:sub(1, last - 1) .. '\\' .. s:sub(last)
+  end
+  return s
+end
+
+--- The inverse of `escape_task()`: `n` backslashes before a dot become `floor(n / 2)`.
+---@param text string
+---@return string
+function M.unescape_task(text)
+  return (
+    text:gsub('(\\+)' .. DOT, function(bs)
+      return bs:sub(1, math.floor(#bs / 2)) .. DOT
+    end)
+  )
+end
+
+--- A task line, without its extmark. With owners shown, the description is escaped (see
+--- `escape_task()`), so the owners suffix only ever holds real owners.
 ---@param task table
 ---@param refs shortcut.story.Refs
 ---@param show_owners boolean
 ---@return string
 function M.task_line(task, refs, show_owners)
-  local line = ('- [%s] %s'):format(
-    task.complete == true and 'x' or ' ',
-    one_line(task.description)
-  )
+  local description = one_line(task.description)
+  if show_owners then
+    description = M.escape_task(description)
+  end
+  local line = ('- [%s] %s'):format(task.complete == true and 'x' or ' ', description)
   local owners = list_of(task.owner_ids)
   if show_owners and #owners > 0 then
     local mentions = {}
@@ -528,6 +615,8 @@ end
 ---@field refs shortcut.story.Refs What it was rendered with (`epic` included).
 ---@field show_owners boolean
 ---@field task_marks table<integer, integer> Extmark ID (namespace `shortcut.tasks`) -> task ID.
+---@field stale? string Set when the snapshot no longer matches the server in a way a save can't
+---  account for (see `invalidate()`): why saving is refused until the story is reloaded.
 
 ---@type table<integer, shortcut.story.Snapshot>
 local snapshots = {}
@@ -588,7 +677,8 @@ end
 ---     and only the task rendered first keeps it; the others count as deleted,
 ---   - a mark follows its line when it is moved without being deleted (`:move`, `cc`, editing
 ---     the text, `yyp` (the copy is new), `<CR>` at column 0). A line that is deleted and put
----     back elsewhere (`ddp`) loses its mark: it reads as a deleted task plus a new one.
+---     back elsewhere (`ddp`) or replaced (`nvim_buf_set_lines()`) loses its mark; editing then
+---     matches it by its text (see `invalid_task_marks()` and `shortcut.buffer.story_diff`).
 ---@param buf? integer Defaults to the current buffer.
 ---@return { id: integer, row: integer }[]
 function M.task_marks(buf)
@@ -617,6 +707,52 @@ function M.task_marks(buf)
     end
   end
   return out
+end
+
+--- The task extmarks of a buffer that were invalidated (their line was deleted, e.g. replaced
+--- with `nvim_buf_set_lines()`): `{ task_id, row }`, in buffer order. An invalidated mark stays
+--- where its line was, so editing can still match a line put there to its task.
+---@param buf? integer Defaults to the current buffer.
+---@return { id: integer, row: integer }[]
+function M.invalid_task_marks(buf)
+  buf = (buf == nil or buf == 0) and vim.api.nvim_get_current_buf() or buf --[[@as integer]]
+  local snap = snapshots[buf]
+  if not snap then
+    return {}
+  end
+  local out = {} ---@type { id: integer, row: integer }[]
+  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, M.tasks_ns(), 0, -1, { details = true })) do
+    local task, details = snap.task_marks[mark[1]], mark[4]
+    if task and details and details.invalid then
+      table.insert(out, { id = task, row = mark[2] })
+    end
+  end
+  return out
+end
+
+--- Mark lines again as the tasks they were matched to (after their marks were invalidated):
+--- each task's old mark is replaced by a new one on its line.
+---@param buf integer
+---@param links table<integer, integer> 1-based line -> task ID.
+function M.relink(buf, links)
+  local snap = snapshots[buf]
+  if not snap then
+    return
+  end
+  local ns = M.tasks_ns()
+  local count = vim.api.nvim_buf_line_count(buf)
+  for line, id in pairs(links) do
+    if line <= count then
+      for mark, task in pairs(snap.task_marks) do
+        if task == id then
+          snap.task_marks[mark] = nil
+          pcall(vim.api.nvim_buf_del_extmark, buf, ns, mark)
+        end
+      end
+      local mark = vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, { invalidate = true })
+      snap.task_marks[mark] = id
+    end
+  end
 end
 
 --- Put the cursor of every window showing `buf` on `line` (1-based).
@@ -657,14 +793,24 @@ function M.jump(buf, comment)
   return true
 end
 
---- Write a rendered story into `buf`: lines, task extmarks, snapshot.
+--- Namespace of the diagnostics a failed save leaves (see `shortcut.buffer.story_save`).
+M.EDIT_NS = 'shortcut.edit'
+
+---@return integer
+function M.edit_ns()
+  return vim.api.nvim_create_namespace(M.EDIT_NS)
+end
+
+--- Write a rendered story into `buf`: lines, task extmarks, snapshot. Clears the diagnostics of
+--- a previous save.
 ---@param buf integer
 ---@param story table
 ---@param refs shortcut.story.Refs
 ---@param show_owners boolean
 ---@return shortcut.story.Snapshot
-local function apply(buf, story, refs, show_owners)
+function M.apply(buf, story, refs, show_owners)
   local lines, meta = M.render(story, refs, { show_owners = show_owners })
+  vim.diagnostic.reset(M.edit_ns(), buf)
   local undolevels = vim.bo[buf].undolevels
   vim.bo[buf].undolevels = -1
   vim.bo[buf].modifiable = true
@@ -690,6 +836,68 @@ local function apply(buf, story, refs, show_owners)
   }
   snapshots[buf] = snap
   return snap
+end
+
+--- Make `story` (fetched again) the snapshot of `buf` without changing its lines: after a save
+--- that partly failed, the buffer keeps the edits, and the next save compares them with what
+--- the server has now, so only what failed is sent again. Task extmarks of tasks the server no
+--- longer has are removed; `created` adds marks for tasks created by that save.
+---@param buf integer
+---@param story table
+---@param refs shortcut.story.Refs
+---@param created table<integer, integer> 1-based line -> ID of the task created from it.
+---@return shortcut.story.Snapshot?
+function M.rebase(buf, story, refs, created)
+  local old = snapshots[buf]
+  if not old then
+    return nil
+  end
+  local lines, meta = M.render(story, refs, { show_owners = old.show_owners })
+  local exists = {}
+  for _, t in ipairs(meta.tasks) do
+    exists[t.id] = true
+  end
+  local ns = M.tasks_ns()
+  local task_marks = {}
+  for mark, id in pairs(old.task_marks) do
+    if exists[id] then
+      task_marks[mark] = id
+    else
+      pcall(vim.api.nvim_buf_del_extmark, buf, ns, mark)
+    end
+  end
+  local count = vim.api.nvim_buf_line_count(buf)
+  for line, id in pairs(created) do
+    if exists[id] and line <= count then
+      local mark = vim.api.nvim_buf_set_extmark(buf, ns, line - 1, 0, { invalidate = true })
+      task_marks[mark] = id
+    end
+  end
+  ---@type shortcut.story.Snapshot
+  local snap = {
+    story = story,
+    updated_at = type(story.updated_at) == 'string' and story.updated_at or nil,
+    lines = lines,
+    meta = meta,
+    refs = refs,
+    show_owners = old.show_owners,
+    task_marks = task_marks,
+  }
+  snapshots[buf] = snap
+  return snap
+end
+
+--- Mark the snapshot of `buf` as out of date: saving is refused (with `reason`) until the story
+--- is reloaded (`:e!`). Used when a save sent changes but the story could not be fetched again,
+--- so the snapshot still shows the story from before them: saving against it would send them
+--- twice.
+---@param buf integer
+---@param reason string
+function M.invalidate(buf, reason)
+  local snap = snapshots[buf]
+  if snap then
+    snap.stale = reason
+  end
 end
 
 --- A message for a failed story fetch.
@@ -830,7 +1038,7 @@ M.handler = {
         )
       end
       local show_owners = require('shortcut.config').get().tasks.show_owners
-      local ok, apply_err = pcall(apply, buf, story, M.cache_refs(epic), show_owners)
+      local ok, apply_err = pcall(M.apply, buf, story, M.cache_refs(epic), show_owners)
       if not ok then
         snapshots[buf] = nil
         -- Without the `file:line: ` prefix of the error.
@@ -846,8 +1054,8 @@ M.handler = {
     loading[buf] = handle
   end,
 
-  save = function(_, _, _, done)
-    done('editing stories is not available yet; the changes were not saved')
+  save = function(buf, id, opts, done)
+    require('shortcut.buffer.story_save').save(buf, id, opts, done)
   end,
 
   jump = function(buf, comment)

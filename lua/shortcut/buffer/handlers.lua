@@ -24,8 +24,10 @@ local M = {}
 --- modifiable while it writes (it is not modifiable while loading).
 ---@alias shortcut.buffer.LoadDone fun(err?: string, lines?: string[])
 
---- Called by a saver when it has finished. `'modified'` is cleared only on success.
----@alias shortcut.buffer.SaveDone fun(err?: string)
+--- Called by a saver when it has finished. `'modified'` is cleared only on success, and not if
+--- `opts.keep_modified` is set (e.g. the user cancelled the save: nothing was saved, but it is not
+--- an error either).
+---@alias shortcut.buffer.SaveDone fun(err?: string, opts?: { keep_modified?: boolean })
 
 ---@class shortcut.buffer.Handler
 ---@field load fun(buf: integer, id: integer, opts: shortcut.buffer.LoadOpts, done: shortcut.buffer.LoadDone)
@@ -571,7 +573,7 @@ local function on_write(ev)
   local tick = vim.b[buf].changedtick
   local finished = false
   ---@type shortcut.buffer.SaveDone
-  local function done(err)
+  local function done(err, opts)
     main_loop(function()
       if finished then
         return
@@ -580,7 +582,11 @@ local function on_write(ev)
       if err then
         -- Reported even if the buffer has gone: the changes were not saved.
         notify.error(('failed to save sc-%d: %s'):format(id, err))
-      elseif vim.api.nvim_buf_is_loaded(buf) and vim.b[buf].changedtick == tick then
+      elseif
+        not (opts and opts.keep_modified)
+        and vim.api.nvim_buf_is_loaded(buf)
+        and vim.b[buf].changedtick == tick
+      then
         vim.bo[buf].modified = false
       end
     end)

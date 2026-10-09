@@ -65,6 +65,7 @@ T['completion']['lists subcommands'] = function()
   local builtin = {
     'browse',
     'comment',
+    'diff',
     'epic',
     'epics',
     'help',

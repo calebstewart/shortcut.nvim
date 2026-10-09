@@ -26,6 +26,7 @@ local M = {}
 
 ---@class shortcut.Config.Tasks
 ---@field show_owners boolean Show task owners as a trailing ` · @mention ...` on task lines.
+---@field confirm_delete boolean Ask before a save deletes tasks.
 
 ---@type shortcut.Config
 local defaults = {
@@ -35,7 +36,7 @@ local defaults = {
   sc_ids = true,
   picker = { page_size = 25, max_results = 200 },
   http = { timeout = 30 },
-  tasks = { show_owners = true },
+  tasks = { show_owners = true, confirm_delete = true },
 }
 
 ---@param v any
@@ -69,6 +70,7 @@ local schema = {
   },
   tasks = {
     show_owners = { 'boolean' },
+    confirm_delete = { 'boolean' },
   },
 }
 
