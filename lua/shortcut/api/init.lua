@@ -18,13 +18,15 @@
 --- with each function).
 local M = {}
 
---- Check that `id` is a public ID (a positive integer). Raises an error otherwise: passing
+--- Check that `id` is a public ID: a positive integer, at most `shortcut.uri.MAX_ID` (the
+--- bound IDs in buffer names and links are parsed with). Raises an error otherwise: passing
 --- anything else is a bug in the caller.
 ---@param name string Argument name, for the error message.
 ---@param id any
 function M.check_id(name, id)
+  local max = require('shortcut.uri').MAX_ID
   vim.validate(name, id, function(v)
-    return type(v) == 'number' and v > 0 and v == math.floor(v) and v < 2 ^ 53
+    return type(v) == 'number' and v > 0 and v == math.floor(v) and v <= max
   end, 'positive integer')
 end
 

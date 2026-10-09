@@ -541,10 +541,28 @@ end
 
 T['sc-<id> API resolver']['is the default, and is not loaded at startup'] = function()
   child.restart({ '-u', 'tests/minimal_init.lua' })
-  eq(child.lua_get([[require('shortcut.buffer.handlers').api_resolver ~= nil]]), true)
   for _, mod in ipairs({ 'shortcut.http', 'shortcut.api.stories', 'shortcut.api.epics' }) do
     eq(child.lua_get('package.loaded[...] == nil', { mod }), true)
   end
+  -- Nothing set: sc-<id> goes to the API, story first, then epic.
+  child.lua([[
+    _G.messages = {}
+    vim.notify = function(msg, level) table.insert(_G.messages, { msg = msg, level = level }) end
+    vim.env.SHORTCUT_API_TOKEN = 'test-token-0000-1111-2222-3333wxyz'
+    dofile('tests/fake_transport.lua')
+    _G.responses = {
+      { status = 200, fixture = 'story' },
+      { status = 404, body = '{}' },
+      { status = 200, fixture = 'epic' },
+    }
+  ]])
+  child.cmd('edit sc-101')
+  wait_for('shortcut://story/101')
+  child.cmd('edit sc-201')
+  wait_for('shortcut://epic/201')
+  eq(cur_name(), 'shortcut://epic/201')
+  eq(urls(), { 'GET /stories/101', 'GET /stories/201', 'GET /epics/201' })
+  eq(messages(), {})
 end
 
 T['sc-<id> API resolver']['opens a story'] = function()
@@ -590,6 +608,56 @@ T['sc-<id> API resolver']['reports other errors without trying epics'] = functio
     'shortcut.nvim: could not look up sc-5: GET /stories/5: HTTP 500: server error'
   )
   eq(urls(), { 'GET /stories/5' })
+end
+
+T['sc-<id> API resolver']['closing the sc-<id> buffer cancels the lookup silently'] = function()
+  -- A request that does not answer until it is told to.
+  child.lua([[
+    require('shortcut.http')._set_transport(function(req, done)
+      table.insert(_G.requests, req)
+      _G.answer = function() done({ status = 404, body = '{}' }) end
+      return { cancel = function() _G.cancelled = _G.cancelled + 1 end }
+    end)
+  ]])
+  child.cmd('edit sc-5')
+  child.lua('vim.wait(1000, function() return #_G.requests == 1 end, 1)')
+  child.cmd('bwipeout! sc-5')
+  child.lua('_G.answer()')
+  child.lua('vim.wait(100)')
+  eq(child.lua_get('_G.cancelled'), 1)
+  eq(urls(), { 'GET /stories/5' })
+  eq(messages(), {})
+end
+
+T['sc-<id>']['a lookup finishing after its buffer is gone is not reported'] = function()
+  child.lua([[
+    _G.cancels = 0
+    handlers.set_resolver(function(id, done)
+      _G.resolve_done = done
+      return { cancel = function() _G.cancels = _G.cancels + 1 end }
+    end)
+  ]])
+  edit('sc-55')
+  child.cmd('bwipeout! sc-55')
+  eq(child.lua_get('_G.cancels'), 1)
+  -- A resolver that answers anyway.
+  child.lua([[_G.resolve_done(nil, 'offline'); vim.wait(20)]])
+  eq(messages(), {})
+  eq(bufname(), 'start.txt')
+
+  -- A resolver without a handle is fine too.
+  child.lua([[handlers.set_resolver(function(id, done) _G.resolve_done = done end)]])
+  edit('sc-56')
+  child.cmd('bwipeout! sc-56')
+  child.lua([[_G.resolve_done(nil)]])
+  settle()
+  eq(messages(), {})
+end
+
+T['sc-<id>']['resolver errors are reported without a file:line prefix'] = function()
+  child.lua([[handlers.set_resolver(function() error('boom') end)]])
+  edit('sc-55')
+  eq(messages()[1].msg, 'shortcut.nvim: could not look up sc-55: boom')
 end
 
 T['sc-<id>']['other names matching sc-[0-9]* open as normal files'] = function()
