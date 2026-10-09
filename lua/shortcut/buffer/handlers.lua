@@ -67,8 +67,37 @@ end
 ---@type table<shortcut.Kind, shortcut.buffer.Handler>
 local registry = { story = placeholder('story'), epic = placeholder('epic') }
 
+--- The default resolver: `GET /stories/<id>`, and on 404 `GET /epics/<id>`.
+---
+--- Stories and epics share one public-ID space, so an ID names at most one of them and the order
+--- does not matter. (Not stated in the API docs; checked against a real workspace: thousands of
+--- epic IDs interleave with story IDs and never coincide with story, label or iteration IDs, and
+--- `GET /stories/<epic id>` and `GET /epics/<story id>` answer 404.) The API modules are only
+--- loaded when an `sc-<id>` is opened.
+---@type shortcut.buffer.Resolver
+function M.api_resolver(id, done)
+  local http = require('shortcut.http')
+  require('shortcut.api.stories').get(id, function(err)
+    if not err then
+      return done('story')
+    end
+    if err.status ~= 404 then
+      return done(nil, http.format_error(err))
+    end
+    require('shortcut.api.epics').get(id, function(epic_err)
+      if not epic_err then
+        return done('epic')
+      end
+      if epic_err.status == 404 then
+        return done(nil)
+      end
+      done(nil, http.format_error(epic_err))
+    end)
+  end)
+end
+
 ---@type shortcut.buffer.Resolver?
-local resolver = nil
+local resolver = M.api_resolver
 
 ---@type table<integer, shortcut.Kind>
 local kind_cache = {}
@@ -116,8 +145,8 @@ function M.register(kind, handler)
   registry[kind] = handler
 end
 
---- Set how `sc-<id>` is resolved to a story or an epic. Without a resolver, `sc-<id>` is
---- assumed to be a story. Answers are remembered for the session.
+--- Set how `sc-<id>` is resolved to a story or an epic. The default is `api_resolver`; with
+--- `nil`, `sc-<id>` is assumed to be a story. Answers are remembered for the session.
 ---@param fn shortcut.buffer.Resolver?
 function M.set_resolver(fn)
   vim.validate('fn', fn, 'function', true)

@@ -144,9 +144,10 @@ Other ways of naming it switch to that buffer:
 - `:e https://app.shortcut.com/<workspace>/story/<id>/...` (or `/epic/<id>`): a link copied from
   the web app. Neovim's built-in download of `https://` files is skipped for these. A link to a
   workspace other than your token's opens with a warning.
-- `:e sc-<id>`: looked up as a story or epic. Turn this off with `sc_ids = false`. Names that
-  merely start with `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g.
-  `notes/sc-42`), and files that exist on disk open as normal files.
+- `:e sc-<id>`: looked up as a story, then as an epic (stories and epics share one ID space, so
+  an ID is never both). Turn this off with `sc_ids = false`. Names that merely start with
+  `sc-<digits>` (e.g. `sc-1notes.txt`), paths with a directory (e.g. `notes/sc-42`), and files
+  that exist on disk open as normal files.
 - `gf` on a Shortcut link or on `sc-<id>`. For `sc-<id>` this works through `'includeexpr'`,
   which the plugin sets globally when it is empty, and chains onto the `gitcommit` ftplugin's
   own. Other filetypes that set their own (e.g. `lua`, `python`) can opt in from
@@ -160,7 +161,7 @@ After the switch, `<C-^>` returns to the buffer you came from.
 
 > [!NOTE]
 > Rendering is not implemented yet: the buffer only shows the object's kind and ID, and `:w`
-> reports that saving is not supported. For now `sc-<id>` always opens a story.
+> reports that saving is not supported.
 
 ## Development
 

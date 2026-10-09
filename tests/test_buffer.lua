@@ -20,6 +20,9 @@ local T = new_set({
         vim.fn.executable = function(name) return name == 'curl' and 1 or executable(name) end
 
         _G.handlers = require('shortcut.buffer.handlers')
+        -- Routing tests: sc-<id> is a story unless a test says otherwise. The default (API)
+        -- resolver is tested in 'sc-<id> API resolver'.
+        handlers.set_resolver(nil)
 
         -- Work in a scratch directory with a known starting buffer.
         _G.dir = vim.fn.tempname() .. '/'
@@ -504,6 +507,89 @@ T['sc-<id>']['reports resolver errors'] = function()
   eq(bufname(), 'start.txt')
   eq(buffers(), { 'start.txt' })
   eq(messages()[1].msg, 'shortcut.nvim: could not look up sc-55: offline')
+end
+
+T['sc-<id> API resolver'] = new_set({
+  hooks = {
+    pre_case = function()
+      -- The child works in a scratch directory.
+      child.lua(
+        [[
+        vim.env.SHORTCUT_API_TOKEN = 'test-token-0000-1111-2222-3333wxyz'
+        dofile(...)
+        handlers.set_resolver(handlers.api_resolver)
+      ]],
+        { vim.fn.fnamemodify('tests/fake_transport.lua', ':p') }
+      )
+    end,
+  },
+})
+
+--- Wait until the current buffer is `name`.
+local function wait_for(name)
+  child.lua(
+    [[local name = ...; vim.wait(2000, function() return vim.api.nvim_buf_get_name(0) == name end, 5)]],
+    { name }
+  )
+end
+
+local function urls()
+  return vim.tbl_map(function(r)
+    return r.method .. ' ' .. r.url:gsub('^https://api%.app%.shortcut%.com/api/v3', '')
+  end, child.lua_get('_G.requests'))
+end
+
+T['sc-<id> API resolver']['is the default, and is not loaded at startup'] = function()
+  child.restart({ '-u', 'tests/minimal_init.lua' })
+  eq(child.lua_get([[require('shortcut.buffer.handlers').api_resolver ~= nil]]), true)
+  for _, mod in ipairs({ 'shortcut.http', 'shortcut.api.stories', 'shortcut.api.epics' }) do
+    eq(child.lua_get('package.loaded[...] == nil', { mod }), true)
+  end
+end
+
+T['sc-<id> API resolver']['opens a story'] = function()
+  child.lua([[_G.responses = { { status = 200, fixture = 'story' } }]])
+  edit('sc-101')
+  wait_for('shortcut://story/101')
+  eq(cur_name(), 'shortcut://story/101')
+  eq(urls(), { 'GET /stories/101' })
+  eq(messages(), {})
+end
+
+T['sc-<id> API resolver']['opens an epic when there is no such story, and remembers it'] = function()
+  child.lua(
+    [[_G.responses = { { status = 404, body = '{}' }, { status = 200, fixture = 'epic' } }]]
+  )
+  edit('sc-201')
+  wait_for('shortcut://epic/201')
+  eq(cur_name(), 'shortcut://epic/201')
+  eq(urls(), { 'GET /stories/201', 'GET /epics/201' })
+
+  edit('start.txt')
+  edit('sc-201')
+  eq(cur_name(), 'shortcut://epic/201')
+  eq(#urls(), 2)
+  eq(messages(), {})
+end
+
+T['sc-<id> API resolver']['reports an ID that is neither'] = function()
+  child.lua([[_G.responses = { { status = 404, body = '{}' }, { status = 404, body = '{}' } }]])
+  edit('sc-5')
+  child.lua([[vim.wait(2000, function() return #_G.messages > 0 end, 5)]])
+  eq(bufname(), 'start.txt')
+  eq(messages()[1].msg, 'shortcut.nvim: sc-5 not found')
+end
+
+T['sc-<id> API resolver']['reports other errors without trying epics'] = function()
+  child.lua([[_G.responses = { { status = 500, body = '{}' } }]])
+  edit('sc-5')
+  child.lua([[vim.wait(2000, function() return #_G.messages > 0 end, 5)]])
+  eq(bufname(), 'start.txt')
+  eq(
+    messages()[1].msg,
+    'shortcut.nvim: could not look up sc-5: GET /stories/5: HTTP 500: server error'
+  )
+  eq(urls(), { 'GET /stories/5' })
 end
 
 T['sc-<id>']['other names matching sc-[0-9]* open as normal files'] = function()
