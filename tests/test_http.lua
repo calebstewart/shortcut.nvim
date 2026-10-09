@@ -173,11 +173,15 @@ end
 
 T['request()']['rejects a string body containing NUL'] = function()
   -- curl's config reader would silently truncate it.
-  expect.error(function()
-    child.lua(
-      [[_G.http.request({ method = 'POST', path = '/x', body = 'before\0after' }, function() end)]]
-    )
-  end, 'without NUL bytes')
+  local ok, err = pcall(
+    child.lua,
+    [[_G.http.request({ method = 'POST', path = '/x', body = 'secret-before\0secret-after' },
+      function() end)]]
+  )
+  eq(ok, false)
+  err = tostring(err)
+  eq(err:find('request body must not contain NUL bytes', 1, true) ~= nil, true)
+  eq(err:find('secret', 1, true), nil) -- the body is not quoted
   eq(#requests(), 0)
   -- A table is JSON-encoded, which escapes NUL.
   respond({ { status = 200, body = '{}' } })

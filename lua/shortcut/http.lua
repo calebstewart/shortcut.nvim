@@ -399,10 +399,13 @@ function M.request(req, callback)
   vim.validate('req.path', req.path, function(p)
     return type(p) == 'string' and p:sub(1, 1) == '/'
   end, 'string starting with /')
-  vim.validate('req.body', req.body, function(b)
-    -- curl's config reader stops at NUL; JSON-encoded tables never contain a raw one.
-    return b == nil or type(b) == 'table' or (type(b) == 'string' and not b:find('\0', 1, true))
-  end, 'table, or string without NUL bytes')
+  vim.validate('req.body', req.body, { 'table', 'string' }, true)
+  -- curl's config reader stops at NUL; JSON-encoded tables never contain a raw one. A fixed
+  -- message: the body (e.g. a whole description) must not end up in the error.
+  local raw = req.body
+  if type(raw) == 'string' and raw:find('\0', 1, true) then
+    error('request body must not contain NUL bytes', 2)
+  end
   vim.validate('callback', callback, 'function')
   local method = (req.method or 'GET'):upper()
   local path = req.path
