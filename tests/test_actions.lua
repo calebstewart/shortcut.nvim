@@ -663,14 +663,21 @@ T['refresh']['clears the memory and disk caches and refetches'] = function()
   load_cache()
   eq(cache_file_exists(), true)
   eq(count('GET /workflows'), 1)
-  child.lua(
-    [[_G.overrides['GET /workflows'] = { status = 200, hold = true, fixture = 'workflows' }]]
-  )
+  -- Hold every refetch, so nothing is written back before the checks.
+  child.lua([[
+    for _, name in ipairs({ 'workflows', 'members', 'labels', 'groups', 'iterations' }) do
+      _G.overrides['GET /' .. name] = { status = 200, hold = true, fixture = name }
+    end
+    _G.overrides['GET /epic-workflow'] = { status = 200, hold = true, fixture = 'epic_workflow' }
+  ]])
   child.cmd('Shortcut refresh')
-  -- Cleared at once (the refetch is held).
+  -- Cleared at once.
   eq(cache_file_exists(), false)
   eq(child.lua_get([[require('shortcut.cache').workflows()]]), vim.NIL)
-  child.lua([[vim.wait(1000, function() return #_G.held > 0 end, 5); _G.held[1]()]])
+  child.lua([[
+    vim.wait(1000, function() return #_G.held == 6 end, 5)
+    for _, release in ipairs(_G.held) do release() end
+  ]])
   wait_messages(1)
   eq(messages(), { { msg = 'shortcut.nvim: lookup lists refreshed', level = 2 } })
   eq(count('GET /workflows'), 2)
