@@ -8,13 +8,22 @@ local JDOE = '00000000-0000-4000-8000-000000000101'
 local ALEX = '00000000-0000-4000-8000-000000000102'
 local GONE = '00000000-0000-4000-8000-000000000999'
 
+--- (Re)start the child in time zone `tz`. Comment dates are shown in local time, and the C
+--- library may read `TZ` only once, so it is set in the child's environment from the start.
+--- POSIX forms work without the tz database (e.g. in the Nix build sandbox).
+---@param tz string
+local function restart(tz)
+  local old = vim.env.TZ
+  vim.env.TZ = tz
+  child.restart({ '-u', 'tests/minimal_init.lua' })
+  vim.env.TZ = old
+end
+
 local T = new_set({
   hooks = {
     pre_case = function()
-      child.restart({ '-u', 'tests/minimal_init.lua' })
+      restart('UTC0')
       child.lua([[
-        -- Comment dates are shown in local time.
-        vim.env.TZ = 'UTC0'
         _G.messages = {}
         vim.notify = function(msg, level) table.insert(_G.messages, { msg = msg, level = level }) end
         _G.story = require('shortcut.buffer.story')
@@ -346,8 +355,8 @@ end
 
 T['times']['are shown in local time'] = function()
   eq(child.lua_get([[story.format_time('2026-02-01T23:30:00Z')]]), '2026-02-01 23:30')
-  -- POSIX form: works without the tz database (e.g. in the Nix build sandbox).
-  child.lua([[vim.env.TZ = 'IST-5:30']])
+  restart('IST-5:30')
+  child.lua([[_G.story = require('shortcut.buffer.story')]])
   eq(child.lua_get([[story.format_time('2026-02-01T23:30:00Z')]]), '2026-02-02 05:00')
   eq(child.lua_get([[story.format_time('not a time')]]), 'not a time')
 end
