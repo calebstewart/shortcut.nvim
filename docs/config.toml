@@ -1,0 +1,47 @@
+# Zola configuration for the documentation site at
+# https://calebstew.art/shortcut.nvim.
+#
+# The site is a *project* Pages site, so it is served from a sub-path of the
+# domain rather than its root. Every internal link therefore goes through
+# `get_url` or a `@/`-prefixed markdown link, both of which are rewritten
+# against `base_url`; a hand-written "/foo/" would resolve to the landing page's
+# domain root and 404.
+base_url = "https://calebstew.art/shortcut.nvim"
+
+title = "shortcut.nvim"
+description = "Browse, search, and edit Shortcut stories and epics without leaving Neovim: stories open as Markdown buffers, and :w saves them back to Shortcut."
+default_language = "en"
+
+compile_sass = false
+build_search_index = false
+generate_feeds = false
+minify_html = true
+
+[markdown]
+smart_punctuation = true
+
+# `> [!NOTE]` and `> [!WARNING]` blocks.
+github_alerts = true
+
+# Each `##` gets a quiet "#" beside it, rendered by templates/anchor-link.html,
+# so a row in the configuration and command tables can be linked to directly.
+insert_anchor_links = "right"
+
+# `class` emits class names instead of inline colours, and both the light and
+# the dark class go on every token span; which one wins is decided by which of
+# the two generated stylesheets is active, and `base.html` gates the dark one on
+# `prefers-color-scheme`. Inline colours would bake one theme into the HTML and
+# ignore the reader's setting.
+[markdown.highlighting]
+style = "class"
+light_theme = "ayu-light"
+dark_theme = "ayu-dark"
+add_color_scheme = true
+
+[extra]
+tagline = "Shortcut stories and epics as Markdown buffers: search, open, edit, and :w to save them back."
+repository = "https://github.com/calebstewart/shortcut.nvim"
+
+# Absolute, not root-relative: the landing page lives at the domain root, which
+# is *above* this site's base_url, so `get_url` cannot express it.
+author_site = "https://calebstew.art"

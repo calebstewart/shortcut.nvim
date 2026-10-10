@@ -1,0 +1,19 @@
+<!--
+  A story card with a ticked task on it, which is the whole idea: a Shortcut
+  story is a buffer you edit. In the site's accent colour; `currentColor` plus
+  a media query is what lets one file serve both schemes, since a favicon gets
+  no stylesheet of its own. (No double hyphens in here: XML forbids them in a
+  comment, and the whole file then fails to parse.)
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <style>
+    svg { color: #9a5b2e; }
+    @media (prefers-color-scheme: dark) { svg { color: #d9a066; } }
+  </style>
+  <rect x="4" y="2.5" width="16" height="19" rx="2.5"/>
+  <path d="M8 7.5h8"/>
+  <path d="M8 13l2 2 4-4"/>
+  <path d="M8 18h5"/>
+</svg>

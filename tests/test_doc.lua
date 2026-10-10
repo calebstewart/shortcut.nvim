@@ -160,4 +160,151 @@ T['the README lists every subcommand'] = function()
   eq(missing, {})
 end
 
+-- The documentation site (docs/) is written by hand from the README and the help file. These read
+-- its Markdown directly, so they run without Zola (CI has no Nix); `nix build .#docs` checks the
+-- rest (templates, and that every `@/` link and anchor resolves).
+T['site'] = new_set()
+
+---@param page string
+---@return string
+local function site_page(page)
+  return table.concat(vim.fn.readfile('docs/content/' .. page), '\n')
+end
+
+--- The first cells of a page's table rows that are a single code span: `| `name` | ...`.
+---@param page string
+---@return table<string, true>
+local function site_table_keys(page)
+  local keys = {}
+  for _, line in ipairs(vim.fn.readfile('docs/content/' .. page)) do
+    local key = line:match('^| `([^`]+)` |')
+    if key then
+      keys[key] = true
+    end
+  end
+  return keys
+end
+
+T['site']['the commands page lists every subcommand'] = function()
+  local page = site_page('commands.md')
+  local missing = {}
+  for _, name in ipairs(require('shortcut.commands').names()) do
+    -- In the table, as `:Shortcut <name>` followed by its arguments or the closing backtick.
+    if not page:find('\n| `:Shortcut ' .. vim.pesc(name) .. '[`%s]') then
+      table.insert(missing, name)
+    end
+  end
+  eq(missing, {})
+end
+
+T['site']['the configuration page lists every option, and only those'] = function()
+  local rows = site_table_keys('configuration.md')
+  local known, missing = {}, {}
+  for _, name in ipairs(require('shortcut.config').option_names()) do
+    known[name] = true
+    if not rows[name] then
+      table.insert(missing, name)
+    end
+  end
+  eq(missing, {})
+  -- The options table is the only one whose first column is a bare identifier; the Lua API
+  -- table's entries are calls.
+  local unknown = {}
+  for key in pairs(rows) do
+    if not known[key] and not key:find('(', 1, true) then
+      table.insert(unknown, key)
+    end
+  end
+  eq(unknown, {})
+end
+
+T['site']['the searching page lists every highlight group, and only those'] = function()
+  local picker = require('shortcut.picker')
+  picker.define_highlights()
+  local rows = site_table_keys('searching.md')
+  local groups = { 'ShortcutId', 'ShortcutOwners', picker.STATE_HL_OTHER }
+  vim.list_extend(groups, vim.tbl_values(picker.STATE_HL))
+  for _, marker in pairs(picker.TYPE_MARKERS) do
+    table.insert(groups, marker[2])
+  end
+  local missing = {}
+  for _, group in ipairs(groups) do
+    if not rows[group] then
+      table.insert(missing, group)
+    end
+  end
+  eq(missing, {})
+  for key in pairs(rows) do
+    if key:match('^Shortcut') then
+      eq({ group = key, defined = vim.fn.hlexists(key) }, { group = key, defined = 1 })
+    end
+  end
+end
+
+--- Whether a line of a page or template links to a root-relative `/path`: an inline Markdown link,
+--- a reference definition, or an `href`/`src` (double-quoted, single-quoted or unquoted). Zola
+--- rejects none of these, and each would 404 under the site's sub-path.
+---@param line string
+---@return boolean
+local function root_relative_link(line)
+  return line:find('%]%(/') ~= nil
+    or line:find('^%s*%[[^%]]+%]:%s*/') ~= nil
+    or line:find('href=["\']?/') ~= nil
+    or line:find('src=["\']?/') ~= nil
+end
+
+T['site']['the root-relative link check catches every form'] = function()
+  local missed = {}
+  for _, line in ipairs({
+    '[Commands](/commands/)',
+    '[commands]: /commands/',
+    '  [commands]:/commands/',
+    '<a href="/commands/">',
+    "<a href='/commands/'>",
+    '<a href=/commands/>',
+    '<img src="/favicon.svg">',
+    "<img src='/favicon.svg'>",
+    '<img src=/favicon.svg>',
+  }) do
+    if not root_relative_link(line) then
+      table.insert(missed, line)
+    end
+  end
+  eq(missed, {})
+  -- And none of the links the site does use.
+  local flagged = {}
+  for _, line in ipairs({
+    '[Commands](@/commands.md)',
+    '[commands]: @/commands.md',
+    '[GitHub](https://github.com/calebstewart/shortcut.nvim)',
+    [[<link rel="stylesheet" href="{{ get_url(path='style.css') }}" />]],
+    '<a class="skip-link" href="#content">',
+    'paths with a directory (e.g. `notes/sc-42`)',
+    "`stdpath('cache')/shortcut/<workspace>/refs.json`",
+  }) do
+    if root_relative_link(line) then
+      table.insert(flagged, line)
+    end
+  end
+  eq(flagged, {})
+end
+
+T['site']['has no root-relative links'] = function()
+  -- The site is served from a sub-path (https://calebstew.art/shortcut.nvim/): `/foo/` would
+  -- resolve against the domain root and 404. Internal links use `@/page.md` or `get_url`.
+  local bad = {}
+  for _, glob in ipairs({ 'docs/content/**/*.md', 'docs/templates/**/*.html' }) do
+    local paths = vim.fn.glob(glob, false, true)
+    expect.no_equality(#paths, 0)
+    for _, path in ipairs(paths) do
+      for i, line in ipairs(vim.fn.readfile(path)) do
+        if root_relative_link(line) then
+          table.insert(bad, ('%s:%d'):format(path, i))
+        end
+      end
+    end
+  end
+  eq(bad, {})
+end
+
 return T

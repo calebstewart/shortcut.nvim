@@ -15,7 +15,8 @@ nothing to set up.
   save with `:w`; conflicting changes are never overwritten silently.
 - Create stories from a template, comment, move a story to another state, open or copy its link.
 
-The full documentation is also in Neovim: `:help shortcut`.
+**[Documentation](https://calebstew.art/shortcut.nvim/)**: installation, every option and command, and
+how story buffers are saved. The same documentation is in Neovim, as `:help shortcut`.
 
 ## Requirements
 
@@ -693,9 +694,9 @@ With Nix:
 
 ```sh
 nix run .#dev        # Neovim with the plugin loaded from this checkout (isolated config)
-nix develop          # neovim, stylua, lua-language-server, make, ...
+nix develop          # neovim, stylua, lua-language-server, make, zola, ...
 make test
-nix flake check      # the plugin package, the tests and the formatting, in the sandbox
+nix flake check      # the plugin package, the tests, the formatting and the docs site, in the sandbox
 ```
 
 `nix run .#dev` reads the plugin straight from the working tree (isolated with
@@ -723,6 +724,21 @@ temporary `$HOME`.
 The help file, `doc/shortcut.txt`, is written by hand; `tests/test_doc.lua` checks that
 `:helptags` accepts it, that its links resolve, and that every command, option and highlight
 group has a tag.
+
+The [documentation site](https://calebstew.art/shortcut.nvim/) is a [Zola](https://www.getzola.org/)
+site in `docs/`, written by hand from this README and the help file, which stay the source of
+truth: a change in behaviour updates all three. `tests/test_doc.lua` also checks that the site
+lists every subcommand, option and highlight group. To preview it with live reload, in
+`nix develop`:
+
+```sh
+zola --root docs serve       # http://127.0.0.1:1111
+nix build .#docs             # the site exactly as it is deployed, in ./result
+```
+
+Internal links must be `@/page.md` links (the site is served from a sub-path); a dead one fails
+the build, and so `nix flake check`. Pushes to `main` deploy it to GitHub Pages
+(`.github/workflows/pages.yml`).
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
