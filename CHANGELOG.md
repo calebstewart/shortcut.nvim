@@ -4,6 +4,13 @@ All notable changes to shortcut.nvim are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Documentation site** at <https://calebstew.art/shortcut.nvim/>, built with Zola from `docs/`
+  (`nix build .#docs`) and deployed to GitHub Pages on every push to `main`.
+
 ## [0.1.0] - 2026-10-09
 
 The first release: browse, search, edit and create Shortcut stories and epics from Neovim 0.12+.
@@ -56,4 +63,5 @@ The first release: browse, search, edit and create Shortcut stories and epics fr
 - **Nix flake**: the plugin package and overlay (`vimPlugins.shortcut-nvim`), `nix run` and
   `nix run .#dev` to try it in an isolated Neovim, a dev shell, and checks.
 
+[Unreleased]: https://github.com/calebstewart/shortcut.nvim/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/calebstewart/shortcut.nvim/releases/tag/v0.1.0
