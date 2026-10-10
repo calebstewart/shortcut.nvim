@@ -241,14 +241,64 @@ T['site']['the searching page lists every highlight group, and only those'] = fu
   end
 end
 
+--- Whether a line of a page or template links to a root-relative `/path`: an inline Markdown link,
+--- a reference definition, or an `href`/`src` (double-quoted, single-quoted or unquoted). Zola
+--- rejects none of these, and each would 404 under the site's sub-path.
+---@param line string
+---@return boolean
+local function root_relative_link(line)
+  return line:find('%]%(/') ~= nil
+    or line:find('^%s*%[[^%]]+%]:%s*/') ~= nil
+    or line:find('href=["\']?/') ~= nil
+    or line:find('src=["\']?/') ~= nil
+end
+
+T['site']['the root-relative link check catches every form'] = function()
+  local missed = {}
+  for _, line in ipairs({
+    '[Commands](/commands/)',
+    '[commands]: /commands/',
+    '  [commands]:/commands/',
+    '<a href="/commands/">',
+    "<a href='/commands/'>",
+    '<a href=/commands/>',
+    '<img src="/favicon.svg">',
+    "<img src='/favicon.svg'>",
+    '<img src=/favicon.svg>',
+  }) do
+    if not root_relative_link(line) then
+      table.insert(missed, line)
+    end
+  end
+  eq(missed, {})
+  -- And none of the links the site does use.
+  local flagged = {}
+  for _, line in ipairs({
+    '[Commands](@/commands.md)',
+    '[commands]: @/commands.md',
+    '[GitHub](https://github.com/calebstewart/shortcut.nvim)',
+    [[<link rel="stylesheet" href="{{ get_url(path='style.css') }}" />]],
+    '<a class="skip-link" href="#content">',
+    'paths with a directory (e.g. `notes/sc-42`)',
+    "`stdpath('cache')/shortcut/<workspace>/refs.json`",
+  }) do
+    if root_relative_link(line) then
+      table.insert(flagged, line)
+    end
+  end
+  eq(flagged, {})
+end
+
 T['site']['has no root-relative links'] = function()
   -- The site is served from a sub-path (https://calebstew.art/shortcut.nvim/): `/foo/` would
   -- resolve against the domain root and 404. Internal links use `@/page.md` or `get_url`.
   local bad = {}
-  for _, dir in ipairs({ 'docs/content', 'docs/templates' }) do
-    for _, path in ipairs(vim.fn.globpath(dir, '*', false, true)) do
+  for _, glob in ipairs({ 'docs/content/**/*.md', 'docs/templates/**/*.html' }) do
+    local paths = vim.fn.glob(glob, false, true)
+    expect.no_equality(#paths, 0)
+    for _, path in ipairs(paths) do
       for i, line in ipairs(vim.fn.readfile(path)) do
-        if line:find('%]%(/') or line:find('href="/') or line:find('src="/') then
+        if root_relative_link(line) then
           table.insert(bad, ('%s:%d'):format(path, i))
         end
       end
