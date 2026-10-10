@@ -84,8 +84,10 @@ nix run github:calebstewart/shortcut.nvim
 ```
 
 This starts a Neovim with the packaged plugin and snacks.nvim, in an isolated configuration
-(`NVIM_APPNAME=shortcut-nvim-dev`): your own config, plugins and state stay out of it. It still uses your
-API token, from the [usual places](@/authentication.md).
+(`NVIM_APPNAME=shortcut-nvim-dev`): your own config, plugins and state stay out of it. Its own config calls
+`setup({})`, so a `token` set in your `setup()` (e.g. a password-manager function) is not used: the token
+comes from [`$SHORTCUT_API_TOKEN`](@/authentication.md#where-the-token-comes-from) (or
+`$CLUBHOUSE_API_TOKEN`) or the [`short` CLI's config file](@/authentication.md#sharing-it-with-the-short-cli).
 
 ## Checking the install
 

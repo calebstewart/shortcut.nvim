@@ -21,8 +21,11 @@ nix run .#dev
 
 This opens a Neovim with the plugin loaded straight from the working tree, in an isolated configuration
 (`NVIM_APPNAME=shortcut-nvim-dev`) with snacks.nvim: changes take effect on restart, without rebuilding. Run
-it from the repository root, or set `SHORTCUT_NVIM_DIR` to a checkout. It uses your real API token, from the
-[usual places](@/authentication.md).
+it from the repository root, or set `SHORTCUT_NVIM_DIR` to a checkout.
+
+Its config calls `setup({})`, so a `token` in your own `setup()` is not used: it talks to your real workspace
+with the token from [`$SHORTCUT_API_TOKEN`](@/authentication.md#where-the-token-comes-from) (or
+`$CLUBHOUSE_API_TOKEN`) or the [`short` CLI's config file](@/authentication.md#sharing-it-with-the-short-cli).
 
 Plain `nix run .` uses the packaged plugin instead and, like every flake build (and `nix flake check`), only
 sees files tracked by git: `git add` new files first.
