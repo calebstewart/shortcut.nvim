@@ -40,6 +40,8 @@
           # The documentation tests check these against the code.
           ./doc
           ./README.md
+          ./docs/content
+          ./docs/templates
           ./Makefile
           ./.stylua.toml
         ];
@@ -137,6 +139,10 @@
         };
 
       systemOf = pkgs: pkgs.stdenv.hostPlatform.system;
+
+      # The documentation site (https://calebstew.art/shortcut.nvim). Not in the overlay: nobody
+      # installs a website.
+      mkDocs = pkgs: pkgs.callPackage ./nix/docs.nix { };
     in
     {
       overlays.default = final: prev: {
@@ -146,6 +152,7 @@
       packages = forAllSystems (pkgs: rec {
         shortcut-nvim = mkPlugin pkgs;
         default = shortcut-nvim;
+        docs = mkDocs pkgs;
       });
 
       apps = forAllSystems (pkgs: {
@@ -171,6 +178,8 @@
             pkgs.git
             pkgs.gnumake
             pkgs.nixfmt
+            # `zola --root docs serve` previews the documentation site.
+            pkgs.zola
           ];
           # Used by the Makefile/tests instead of cloning mini.nvim and snacks.nvim into deps/.
           MINI_NVIM = "${pkgs.vimPlugins.mini-nvim}";
@@ -180,6 +189,10 @@
 
       checks = forAllSystems (pkgs: {
         plugin = self.packages.${systemOf pkgs}.default;
+
+        # A broken template or a dead `@/` link fails the site build, so the docs cannot go
+        # stale unnoticed.
+        docs = self.packages.${systemOf pkgs}.docs;
 
         tests =
           pkgs.runCommand "shortcut-nvim-tests"
