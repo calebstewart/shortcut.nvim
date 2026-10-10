@@ -160,4 +160,101 @@ T['the README lists every subcommand'] = function()
   eq(missing, {})
 end
 
+-- The documentation site (docs/) is written by hand from the README and the help file. These read
+-- its Markdown directly, so they run without Zola (CI has no Nix); `nix build .#docs` checks the
+-- rest (templates, and that every `@/` link and anchor resolves).
+T['site'] = new_set()
+
+---@param page string
+---@return string
+local function site_page(page)
+  return table.concat(vim.fn.readfile('docs/content/' .. page), '\n')
+end
+
+--- The first cells of a page's table rows that are a single code span: `| `name` | ...`.
+---@param page string
+---@return table<string, true>
+local function site_table_keys(page)
+  local keys = {}
+  for _, line in ipairs(vim.fn.readfile('docs/content/' .. page)) do
+    local key = line:match('^| `([^`]+)` |')
+    if key then
+      keys[key] = true
+    end
+  end
+  return keys
+end
+
+T['site']['the commands page lists every subcommand'] = function()
+  local page = site_page('commands.md')
+  local missing = {}
+  for _, name in ipairs(require('shortcut.commands').names()) do
+    -- In the table, as `:Shortcut <name>` followed by its arguments or the closing backtick.
+    if not page:find('\n| `:Shortcut ' .. vim.pesc(name) .. '[`%s]') then
+      table.insert(missing, name)
+    end
+  end
+  eq(missing, {})
+end
+
+T['site']['the configuration page lists every option, and only those'] = function()
+  local rows = site_table_keys('configuration.md')
+  local known, missing = {}, {}
+  for _, name in ipairs(require('shortcut.config').option_names()) do
+    known[name] = true
+    if not rows[name] then
+      table.insert(missing, name)
+    end
+  end
+  eq(missing, {})
+  -- The options table is the only one whose first column is a bare identifier; the Lua API
+  -- table's entries are calls.
+  local unknown = {}
+  for key in pairs(rows) do
+    if not known[key] and not key:find('(', 1, true) then
+      table.insert(unknown, key)
+    end
+  end
+  eq(unknown, {})
+end
+
+T['site']['the searching page lists every highlight group, and only those'] = function()
+  local picker = require('shortcut.picker')
+  picker.define_highlights()
+  local rows = site_table_keys('searching.md')
+  local groups = { 'ShortcutId', 'ShortcutOwners', picker.STATE_HL_OTHER }
+  vim.list_extend(groups, vim.tbl_values(picker.STATE_HL))
+  for _, marker in pairs(picker.TYPE_MARKERS) do
+    table.insert(groups, marker[2])
+  end
+  local missing = {}
+  for _, group in ipairs(groups) do
+    if not rows[group] then
+      table.insert(missing, group)
+    end
+  end
+  eq(missing, {})
+  for key in pairs(rows) do
+    if key:match('^Shortcut') then
+      eq({ group = key, defined = vim.fn.hlexists(key) }, { group = key, defined = 1 })
+    end
+  end
+end
+
+T['site']['has no root-relative links'] = function()
+  -- The site is served from a sub-path (https://calebstew.art/shortcut.nvim/): `/foo/` would
+  -- resolve against the domain root and 404. Internal links use `@/page.md` or `get_url`.
+  local bad = {}
+  for _, dir in ipairs({ 'docs/content', 'docs/templates' }) do
+    for _, path in ipairs(vim.fn.globpath(dir, '*', false, true)) do
+      for i, line in ipairs(vim.fn.readfile(path)) do
+        if line:find('%]%(/') or line:find('href="/') or line:find('src="/') then
+          table.insert(bad, ('%s:%d'):format(path, i))
+        end
+      end
+    end
+  end
+  eq(bad, {})
+end
+
 return T
