@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{# GitHub Pages serves 404.html for any missing path under the site, at that
+   path: so every link here goes through `get_url` and is absolute, never
+   relative to wherever the reader happened to land. #}
+{% block title %}Page not found — {{ config.title }}{% endblock %}
+
+{% block content %}
+  <header class="page-head">
+    <h1>Page not found</h1>
+    <p class="tagline">There is no page at this address.</p>
+  </header>
+
+  <div class="prose">
+    <p>
+      It may have moved. Start from the
+      <a href="{{ get_url(path='@/_index.md') }}">overview</a>, or pick a page from the
+      navigation.
+    </p>
+  </div>
+{% endblock %}
